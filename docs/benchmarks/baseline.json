@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "project": "pkl-zig",
+    "repository": "https://github.com/burakssen/pkl-zig",
+    "commit": "6a113ab90fcf1fe6f504208893aab09e4ea72e1e"
+  },
+  "environment": {
+    "zig": "0.16.0",
+    "pkl": "0.32.2",
+    "os": "macos",
+    "arch": "arm64"
+  },
+  "measurements": {
+    "unit_test_seconds": 11.24,
+    "integration_test_seconds": 8.47,
+    "codegen_seconds": 6.72,
+    "fixture": {
+      "name": "original",
+      "size_bytes": 9120
+    },
+    "decoder": {
+      "runs": 7,
+      "throughput_mib_per_s": {
+        "median": 180.134,
+        "min": 178.066,
+        "max": 182.971
+      },
+      "allocations_per_decode": 1960,
+      "requested_bytes_per_decode": 201916
+    },
+    "evaluator": {
+      "cached_cold_ms": {
+        "median": 7.852625,
+        "min": 7.642167,
+        "max": 7.994875
+      },
+      "first_uncached_observed_ms": 73.4435,
+      "warm_us": {
+        "median": 31.54625,
+        "min": 31.07333,
+        "max": 34.48375
+      }
+    }
+  },
+  "gates": {
+    "method": "same-run comparison against this baseline",
+    "codec_geometric_mean_speedup_min": 1.25,
+    "allocation_reduction_min": 0.25,
+    "server_bound_relative_tolerance": 0.05,
+    "absolute_timings_block_release": false
+  },
+  "notes": [
+    "Decoder throughput is mebibytes per second over seven runs.",
+    "Allocation and requested-byte counts are per decode.",
+    "cached_cold_ms is the cached cold evaluator. first_uncached_observed_ms is one observation, not a median.",
+    "Unit, integration, and codegen durations are recorded observations, not medians.",
+    "Release gates use same-run ratios. The absolute timings in this file do not by themselves pass or fail a release."
+  ]
+}

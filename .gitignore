@@ -1,0 +1,11 @@
+# Zig
+.zig-cache/
+zig-out/
+
+# Documentation site
+node_modules/
+.nuxt/
+.output/
+
+# OS
+.DS_Store

@@ -1,0 +1,48 @@
+name: Bug report
+description: Report incorrect zig-pkl behavior
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - type: input
+    id: zig
+    attributes:
+      label: Zig version
+      placeholder: 0.17.0
+    validations:
+      required: true
+  - type: input
+    id: pkl
+    attributes:
+      label: Pkl version
+      placeholder: 0.32.2
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal module, program, or command.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true

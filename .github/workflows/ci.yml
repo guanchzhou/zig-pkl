@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.17.0"
+  # Supported Pkl language version. Evaluator jobs install this release
+  # once those tests exist.
+  PKL_VERSION: "0.32.2"
+
+jobs:
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            name: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            name: linux-aarch64
+          - runner: macos-26
+            name: macos-aarch64
+          - runner: windows-2025
+            name: windows-x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+
+      - name: Format
+        run: zig fmt --check .
+
+      - name: Build
+        run: zig build
+
+      - name: Test
+        run: zig build test
+
+  cross:
+    name: cross (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - aarch64-macos
+          - x86_64-macos
+          - x86_64-windows-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+
+      - name: Build target
+        env:
+          ZIG_TARGET: ${{ matrix.target }}
+        run: zig build -Dtarget="$ZIG_TARGET"
+
+  zig-master:
+    name: zig master
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig master
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: master
+          use-cache: false
+
+      - name: Build
+        run: zig build
+
+      - name: Test
+        run: zig build test

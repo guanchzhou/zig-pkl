@@ -1,0 +1,30 @@
+# Contributing
+
+Contributions are reviewed against this document and the [code of conduct](CODE_OF_CONDUCT.md).
+
+## Setup
+
+- Zig 0.17.0
+- Pkl 0.32.2 when a change exercises evaluation or code generation
+
+```sh
+zig fmt --check .
+zig build
+zig build test
+```
+
+Format Zig sources with `zig fmt` before review.
+
+## Changes
+
+Keep each change focused. Update `CHANGELOG.md` under `Unreleased` when behavior visible to users changes.
+
+Performance work is compared on the same run against the frozen baseline in [docs/benchmarks/baseline.md](docs/benchmarks/baseline.md). Absolute timings from that record are not release thresholds.
+
+Sign your commits. Release tags are signed by the maintainer; see [SECURITY.md](SECURITY.md).
+
+## Review
+
+`main` requires signed commits and passing CI and Security checks. Actions tokens stay read-only except for documentation deployment and release publication.
+
+Report security issues privately, as described in [SECURITY.md](SECURITY.md).
