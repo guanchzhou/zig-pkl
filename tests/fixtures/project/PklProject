@@ -1,0 +1,50 @@
+amends "pkl:Project"
+
+package {
+  name = "fixture"
+  baseUri = "package://example.com/fixture"
+  packageZipUrl = "https://example.com/fixture.zip"
+  version = "1.0.0"
+}
+
+evaluatorSettings {
+  allowedModules {
+    "pkl:"
+    "repl:"
+  }
+  allowedResources {
+    "env:"
+  }
+  timeout = 2.s
+  rootDir = "."
+  env {
+    ["MODE"] = "test"
+  }
+  traceMode = "pretty"
+  externalModuleReaders {
+    ["fixture"] {
+      executable = "./reader"
+      arguments {
+        "--mode"
+        "test"
+      }
+      workingDir = "."
+    }
+  }
+  http {
+    proxy {
+      address = "http://localhost:8080"
+      noProxy {
+        "localhost"
+      }
+    }
+    rewrites {
+      ["https://example.com/"] = "https://mirror.example.com/"
+    }
+    headers {
+      ["https://example.com/**"] {
+        ["X-Fixture"] = "yes"
+      }
+    }
+  }
+}

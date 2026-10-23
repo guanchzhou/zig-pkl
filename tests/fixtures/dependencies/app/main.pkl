@@ -1,0 +1,4 @@
+import "@fixture_dep/value.pkl"
+
+answer = value.answer
+nested = value.nested

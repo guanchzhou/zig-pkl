@@ -1,0 +1,4 @@
+import "@inner/leaf.pkl"
+
+answer = 42
+nested = leaf.value

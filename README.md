@@ -17,7 +17,14 @@ This package is unreleased (`0.0.0`). The module name is `zig_pkl`. The public A
 ```sh
 zig build
 zig build test
+zig build integration-test   # uses PKL_EXEC or pkl on PATH; skips when absent
+zig build fuzz               # bounded; tune with -Dfuzz-iterations and -Dfuzz-seed
 ```
+
+## Limitations
+
+- On POSIX the server runs in its own process group. Shutdown signals the whole group, including processes left behind after the server exits on its own; a process that moves to another group is out of reach. On Windows only the direct child is terminated. A descendant that still holds the server's pipes can delay shutdown until it exits.
+- A timed-out or cancelled request stops waiting on the client side. The server finishes or abandons the work on its own.
 
 ## Baseline
 

@@ -1,0 +1,5 @@
+amends "pkl:Project"
+
+dependencies {
+  ["fixture_dep"] = import("../dep/PklProject")
+}

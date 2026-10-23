@@ -1,0 +1,8 @@
+amends "pkl:Project"
+
+package {
+  name = "leaf"
+  baseUri = "package://example.com/leaf"
+  version = "2.3.4"
+  packageZipUrl = "https://example.com/leaf@\(version).zip"
+}

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "resolvedDependencies": {
+    "package://example.com/dep@1": {
+      "type": "local",
+      "uri": "projectpackage://example.com/dep@1.0.0",
+      "path": "../dep"
+    },
+    "package://example.com/leaf@2": {
+      "type": "local",
+      "uri": "projectpackage://example.com/leaf@2.3.4",
+      "path": "../leaf"
+    }
+  }
+}
