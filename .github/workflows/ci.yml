@@ -75,10 +75,12 @@ jobs:
           mkdir -p "$(dirname "$PKL_EXEC")"
           curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
             --output "$PKL_EXEC" "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/${PKL_ASSET}"
+          # Hash from standard input: with a file name that contains a
+          # backslash, as on Windows, sha256sum prefixes its output with `\`.
           if command -v sha256sum > /dev/null; then
-            actual="$(sha256sum "$PKL_EXEC" | cut -d ' ' -f 1)"
+            actual="$(sha256sum < "$PKL_EXEC" | cut -d ' ' -f 1)"
           else
-            actual="$(shasum -a 256 "$PKL_EXEC" | cut -d ' ' -f 1)"
+            actual="$(shasum -a 256 < "$PKL_EXEC" | cut -d ' ' -f 1)"
           fi
           if [ "$actual" != "$PKL_SHA256" ]; then
             echo "::error::SHA-256 of ${PKL_ASSET} is ${actual}, expected ${PKL_SHA256}"
