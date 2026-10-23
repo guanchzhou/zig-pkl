@@ -14,3 +14,4 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `zig build codegen` and `zig build codegen-test` build steps, and a consumer example in `examples/codegen`.
 - `convert` decodes and encodes enums, tagged unions, single-item pointers, `convert.Map`, `convert.Pair`, and `convert.Dynamic`, and honors `pkl_names`, `pkl_class`, and `pkl_subclasses` declarations.
 - `value.clone` and `value.cloneInto` deep-copy values.
+- `Manager.init` no longer waits for `pkl --version` before starting the server. The version probe runs while the server starts, and the first evaluator creation waits for it and reports its errors. Server shutdown is detected sooner. Together these halve the time to start a server, evaluate, and shut down.

@@ -43,7 +43,9 @@ pub const RequestOptions = struct {
 /// How `Manager.initWithOptions` learns the Pkl version used to validate
 /// evaluator options.
 pub const VersionCheck = union(enum) {
-    /// Run the server command with its final `server` argument replaced by `--version`.
+    /// Run the server command with its final `server` argument replaced by
+    /// `--version`. The probe runs on its own thread while the server starts;
+    /// the first evaluator creation waits for it and reports its errors.
     probe,
     /// Use a version supplied by the caller.
     known: Version,
@@ -180,6 +182,9 @@ pub const Manager = struct {
     thread: ?std.Thread,
     stop: std.atomic.Value(bool),
     pkl_version: ?Version,
+    /// Version probe still owned by the manager; see `VersionCheck.probe`.
+    probe: ?*Probe,
+    probe_mutex: std.Io.Mutex,
     workers: []std.Thread,
     jobs: []Job,
     job_head: usize,
@@ -187,7 +192,8 @@ pub const Manager = struct {
     work_cond: std.Io.Condition,
     workers_stop: bool,
 
-    /// Launches `argv` (for example `pkl server`) and probes its version.
+    /// Launches `argv` (for example `pkl server`) and probes its version
+    /// while the server starts.
     pub fn init(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8, log: logger.Logger) !*Manager {
         return initWithOptions(allocator, io, argv, .{ .log = log });
     }
@@ -199,16 +205,21 @@ pub const Manager = struct {
         init_options: InitOptions,
     ) !*Manager {
         if (argv.len == 0) return error.InvalidArguments;
-        const detected_version: ?Version = switch (init_options.version) {
-            .probe => try version.probeServer(allocator, io, argv),
-            .known => |known| known,
-            .unchecked => null,
+        const probe: ?*Probe = switch (init_options.version) {
+            .probe => try Probe.create(allocator, argv),
+            .known, .unchecked => null,
         };
+        errdefer if (probe) |item| item.destroy();
         const child = try subprocess.Subprocess.spawnWithOptions(allocator, io, argv, init_options.subprocess);
         errdefer child.deinit();
+        if (probe) |item| item.start(io);
         const self = try initWithBackendOptions(allocator, io, child.backend(), init_options);
         self.subprocess = child;
-        self.pkl_version = detected_version;
+        self.probe = probe;
+        self.pkl_version = switch (init_options.version) {
+            .known => |known| known,
+            .probe, .unchecked => null,
+        };
         return self;
     }
 
@@ -247,6 +258,8 @@ pub const Manager = struct {
             .thread = null,
             .stop = std.atomic.Value(bool).init(false),
             .pkl_version = null,
+            .probe = null,
+            .probe_mutex = .init,
             .workers = workers,
             .jobs = jobs,
             .job_head = 0,
@@ -280,6 +293,7 @@ pub const Manager = struct {
         self.allocator.free(self.jobs);
         self.allocator.free(self.workers);
         if (self.subprocess) |child| child.deinit();
+        if (self.probe) |probe| probe.destroy();
         const allocator = self.allocator;
         allocator.destroy(self);
     }
@@ -306,13 +320,18 @@ pub const Manager = struct {
     /// Creates an evaluator with a cancelable client-side request deadline.
     /// When the deadline passes first, a late success response closes the
     /// evaluator that the server created.
+    ///
+    /// Options are validated against the server version before the request
+    /// is sent. While the version probe is still running, the request is sent
+    /// first and validated when the response arrives; options the version
+    /// does not support close the new evaluator and fail with the same error.
     pub fn createEvaluatorWithOptions(
         self: *Manager,
         evaluator_options: Options,
         rejected: *?[]u8,
         request_options: RequestOptions,
     ) !*Evaluator {
-        if (self.pkl_version) |pkl_version| try evaluator_options.validate(pkl_version);
+        const validated = try self.validateIfKnown(evaluator_options);
         const request_id = self.allocateId();
         const request = try options.toRequest(self.allocator, evaluator_options, request_id);
         defer if (request.client_module_readers) |specs| self.allocator.free(specs);
@@ -333,6 +352,12 @@ pub const Manager = struct {
         defer response.deinit();
         switch (response.message) {
             .create_evaluator_response => |body| {
+                if (!validated) self.validate(evaluator_options) catch |err| {
+                    if (body.error_message == null) if (body.evaluator_id) |evaluator_id| {
+                        self.transport.send(&.{ .close_evaluator = .{ .evaluator_id = evaluator_id } }) catch {};
+                    };
+                    return err;
+                };
                 if (body.error_message) |text| {
                     rejected.* = try self.allocator.dupe(u8, text);
                     return error.Rejected;
@@ -359,6 +384,30 @@ pub const Manager = struct {
             },
             else => return error.Protocol,
         }
+    }
+
+    /// Validates `evaluator_options` when the server version is already
+    /// known. Returns false while the version probe is still running.
+    fn validateIfKnown(self: *Manager, evaluator_options: Options) !bool {
+        if (self.probe) |probe| {
+            if (!probe.done.load(.acquire)) return false;
+        }
+        try self.validate(evaluator_options);
+        return true;
+    }
+
+    fn validate(self: *Manager, evaluator_options: Options) !void {
+        if (try self.serverVersion()) |pkl_version| try evaluator_options.validate(pkl_version);
+    }
+
+    /// The version used to validate evaluator options, waiting for the probe
+    /// on first use. A failed probe fails every evaluator creation.
+    fn serverVersion(self: *Manager) version.Error!?Version {
+        const probe = self.probe orelse return self.pkl_version;
+        self.probe_mutex.lockUncancelable(self.io);
+        defer self.probe_mutex.unlock(self.io);
+        probe.join();
+        return try probe.result;
     }
 
     fn allocateId(self: *Manager) i64 {
@@ -489,6 +538,55 @@ pub const Manager = struct {
         self.work_cond.broadcast(self.io);
         self.mutex.unlock(self.io);
         for (self.workers[0..started]) |worker| worker.join();
+    }
+};
+
+/// Runs the version command on its own thread. The command line is copied
+/// because the caller's `argv` may be freed once `initWithOptions` returns.
+const Probe = struct {
+    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
+    argv: []const []const u8,
+    thread: ?std.Thread = null,
+    result: version.Error!Version = error.CommandFailed,
+    /// Set once `result` holds the outcome.
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn create(allocator: std.mem.Allocator, server_argv: []const []const u8) error{ OutOfMemory, UnknownServerCommand }!*Probe {
+        const self = try allocator.create(Probe);
+        errdefer allocator.destroy(self);
+        self.* = .{ .allocator = allocator, .arena = .init(allocator), .argv = &.{} };
+        errdefer self.arena.deinit();
+        const arena = self.arena.allocator();
+        const argv = try version.versionArgv(arena, server_argv);
+        const owned = try arena.alloc([]const u8, argv.len);
+        for (argv, owned) |arg, *slot| slot.* = try arena.dupe(u8, arg);
+        self.argv = owned;
+        return self;
+    }
+
+    /// Probes on the calling thread when a thread cannot be started.
+    fn start(self: *Probe, io: std.Io) void {
+        self.thread = std.Thread.spawn(.{}, run, .{ self, io }) catch {
+            self.run(io);
+            return;
+        };
+    }
+
+    fn run(self: *Probe, io: std.Io) void {
+        self.result = version.queryArgv(self.allocator, io, self.argv);
+        self.done.store(true, .release);
+    }
+
+    fn join(self: *Probe) void {
+        if (self.thread) |thread| thread.join();
+        self.thread = null;
+    }
+
+    fn destroy(self: *Probe) void {
+        self.join();
+        self.arena.deinit();
+        self.allocator.destroy(self);
     }
 };
 
@@ -1113,6 +1211,51 @@ test "a create response that arrives after its timeout closes the server evaluat
     }));
     driver.join();
     try std.testing.expect(script.failed == null);
+}
+
+fn driveUnsupportedCreate(script: *Script) void {
+    driveUnsupportedCreateInner(script) catch |err| {
+        script.failed = err;
+        closeScript(script);
+    };
+}
+
+fn driveUnsupportedCreateInner(script: *Script) !void {
+    var create = try script.takeMessage();
+    defer create.deinit();
+    try script.push(.{ .create_evaluator_response = .{
+        .request_id = create.message.requestId().?,
+        .evaluator_id = 31,
+    } });
+    var close = try script.takeMessage();
+    defer close.deinit();
+    try std.testing.expectEqual(@as(i64, 31), close.message.close_evaluator.evaluator_id);
+}
+
+test "options that a slowly probed version does not support close the new evaluator" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var script = Script{ .allocator = allocator, .io = io };
+    defer script.deinit();
+    const manager = try Manager.initWithBackend(allocator, io, script.transport(), logger.Logger.noop);
+    defer manager.deinit();
+    manager.probe = try Probe.create(allocator, &.{ "/bin/sh", "-c", "sleep 0.2; echo 'Pkl 0.29.1'", "sh", "server" });
+    manager.probe.?.start(io);
+    const driver = try std.Thread.spawn(.{}, driveUnsupportedCreate, .{&script});
+    var rejected: ?[]u8 = null;
+    const traced = Options{ .trace_mode = .pretty };
+    const outcome = manager.createEvaluator(traced, &rejected);
+    driver.join();
+    try std.testing.expect(script.failed == null);
+    if (manager.probe.?.result) |_| {} else |err| if (err == error.FileNotFound) return error.SkipZigTest;
+    try std.testing.expectError(error.UnsupportedVersion, outcome);
+
+    // Once the version is known, unsupported options fail before any request.
+    try std.testing.expectError(error.UnsupportedVersion, manager.createEvaluator(traced, &rejected));
+    script.mutex.lockUncancelable(io);
+    defer script.mutex.unlock(io);
+    try std.testing.expectEqual(@as(usize, 0), script.outgoing.items.len);
 }
 
 const BlockingReader = struct {
