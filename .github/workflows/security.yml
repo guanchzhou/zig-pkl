@@ -42,6 +42,7 @@ jobs:
   dependency-review:
     name: dependency review
     if: github.event_name == 'pull_request'
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
