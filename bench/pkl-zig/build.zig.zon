@@ -1,0 +1,17 @@
+.{
+    .name = .bench_pkl_zig,
+    .version = "0.0.0",
+    .fingerprint = 0xfd9d918d406a5329,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .pkl = .{
+            .url = "git+https://github.com/burakssen/pkl-zig#6a113ab90fcf1fe6f504208893aab09e4ea72e1e",
+            .hash = "pkl_zig-0.0.1-5XcVJPI1BgAaY3IfOwfK_i-09WhfV3UML5dNM4SvLhXE",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

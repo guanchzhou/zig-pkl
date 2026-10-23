@@ -1,0 +1,48 @@
+class Point {
+  x: Float
+  y: Float
+}
+
+ratios = new Listing {
+  for (i in IntSeq(1, 200)) {
+    i * 1.5
+  }
+}
+timeouts = new Listing {
+  for (i in IntSeq(1, 50)) {
+    i.ms
+  }
+}
+quotas = new Listing {
+  for (i in IntSeq(1, 50)) {
+    i.kb
+  }
+}
+points = new Listing {
+  for (i in IntSeq(1, 100)) {
+    new Point {
+      x = i * 0.5
+      y = i * -0.25
+    }
+  }
+}
+weights = new Mapping {
+  for (i in IntSeq(1, 100)) {
+    ["key-\(i)"] = i * 3
+  }
+}
+ports = Set(80, 443, 8080, 8443)
+pair = Pair("left", 7)
+pattern = Regex("[a-z]+-\\d+")
+range = IntSeq(0, 100)
+nested {
+  a {
+    b {
+      c {
+        d {
+          leaf = "deep"
+        }
+      }
+    }
+  }
+}

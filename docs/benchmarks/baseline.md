@@ -40,4 +40,6 @@ Releases are judged on the same run against this baseline. The absolute timings 
 | Allocations | At least 25% fewer per decode than 1960 |
 | Server-bound operations | Within 5% |
 
-The codec gate applies to CPU-bound codec and decoder benchmarks. The server-bound gate is a symmetric relative tolerance of 5% for operations limited by the Pkl server. zig-pkl must also keep the baseline behavior of this pkl-zig revision.
+The codec gate applies to CPU-bound codec and decoder benchmarks. The allocation gate applies to every codec case. The server-bound gate allows zig-pkl to be at most 5% slower than pkl-zig on operations limited by the Pkl server; being faster always passes. zig-pkl must also keep the baseline behavior of this pkl-zig revision.
+
+[comparison.md](comparison.md) describes the same-run benchmark that applies these gates.

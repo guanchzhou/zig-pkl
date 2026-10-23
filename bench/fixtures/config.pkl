@@ -1,0 +1,28 @@
+class Server {
+  host: String
+  port: UInt16
+  enabled: Boolean
+  tags: Listing<String>
+}
+
+name = "zig-pkl-benchmark"
+version = 1
+servers = new Listing {
+  for (i in IntSeq(1, 64)) {
+    new Server {
+      host = "node-\(i).example.test"
+      port = 8000 + i
+      enabled = i.isOdd
+      tags {
+        "api"
+        "region-\(i % 4)"
+        "shard-\(i % 8)"
+      }
+    }
+  }
+}
+metadata = new Mapping {
+  ["owner"] = "benchmark"
+  ["environment"] = "test"
+  ["format"] = "pkl-binary"
+}

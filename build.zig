@@ -83,6 +83,26 @@ pub fn build(b: *std.Build) void {
     const fuzz_step = b.step("fuzz", "Run bounded deterministic fuzzing of the protocol and value decoders");
     fuzz_step.dependOn(&run_fuzz.step);
 
+    const bench_exe = b.addExecutable(.{
+        .name = "bench-zig-pkl",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/zig-pkl.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zig_pkl", .module = mod },
+            },
+        }),
+    });
+    const install_bench = b.addInstallArtifact(bench_exe, .{});
+    const run_bench = b.addRunArtifact(bench_exe);
+    run_bench.addDirectoryArg(b.path("bench/fixtures"));
+    run_bench.addArg(b.option([]const u8, "pkl", "pkl executable used by the bench step (default pkl)") orelse "pkl");
+    run_bench.has_side_effects = true;
+    const bench_step = b.step("bench", "Run the zig-pkl benchmark once; use -Doptimize=ReleaseFast and -Dpkl=<path>");
+    bench_step.dependOn(&install_bench.step);
+    bench_step.dependOn(&run_bench.step);
+
     addCodegen(b, mod, test_mod, toolchain, target, optimize);
 }
 

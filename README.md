@@ -21,6 +21,7 @@ zig build integration-test   # uses PKL_EXEC or pkl on PATH; skips when absent u
 zig build fuzz               # bounded; tune with -Dfuzz-iterations and -Dfuzz-seed
 zig build codegen            # regenerate checked-in bindings; needs Pkl
 zig build codegen-test       # generator tests; live parts skip without Pkl unless ZIG_PKL_REQUIRE_PKL=1
+zig build bench -Doptimize=ReleaseFast -Dpkl=/path/to/pkl
 ```
 
 ## Code generation
@@ -38,9 +39,9 @@ See [docs/codegen.md](docs/codegen.md) for the type mapping, annotations, and bu
 - On POSIX the server runs in its own process group. Shutdown signals the whole group, including processes left behind after the server exits on its own; a process that moves to another group is out of reach. On Windows only the direct child is terminated. A descendant that still holds the server's pipes can delay shutdown until it exits.
 - A timed-out or cancelled request stops waiting on the client side. The server finishes or abandons the work on its own.
 
-## Baseline
+## Performance
 
-Measured comparison data and frozen release gates: [docs/benchmarks/baseline.md](docs/benchmarks/baseline.md).
+Same-run comparison with pkl-zig: [docs/benchmarks/comparison.md](docs/benchmarks/comparison.md). The frozen baseline and release gates: [docs/benchmarks/baseline.md](docs/benchmarks/baseline.md).
 
 ## Documentation
 

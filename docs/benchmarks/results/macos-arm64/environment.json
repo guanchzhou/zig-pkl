@@ -1,0 +1,9 @@
+{
+  "zig": "0.17.0",
+  "zig_0_16": "0.16.0",
+  "pkl": "Pkl 0.32.2 (macOS 26.6.2, native)",
+  "os": "Darwin",
+  "arch": "arm64",
+  "commit": "0c8530b34526933d31b7b8cd7644cbd0d43afbf9",
+  "rounds": 21
+}

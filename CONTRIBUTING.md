@@ -21,7 +21,7 @@ Changes to the generator or to `codegen/` need `zig build codegen-test` with Pkl
 
 Keep each change focused. Update `CHANGELOG.md` under `Unreleased` when behavior visible to users changes.
 
-Performance work is compared on the same run against the frozen baseline in [docs/benchmarks/baseline.md](docs/benchmarks/baseline.md). Absolute timings from that record are not release thresholds.
+Performance work is compared on the same run with `bench/compare.sh`, as described in [docs/benchmarks/comparison.md](docs/benchmarks/comparison.md), against the gates in [docs/benchmarks/baseline.md](docs/benchmarks/baseline.md). Absolute timings from that record are not release thresholds.
 
 Sign your commits. Release tags are signed by the maintainer; see [SECURITY.md](SECURITY.md).
 
