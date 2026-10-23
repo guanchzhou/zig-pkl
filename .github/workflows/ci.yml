@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Commits are checked on a staging branch first; main then fast-forwards
+    # to the same commit, which already carries the required checks.
+    branches: [main, "staging/**"]
   pull_request:
 
 permissions:
