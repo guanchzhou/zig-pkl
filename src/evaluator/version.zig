@@ -50,20 +50,27 @@ pub fn query(allocator: std.mem.Allocator, io: std.Io, executable: []const u8) E
     return queryArgv(allocator, io, &.{ executable, "--version" });
 }
 
-/// Runs `argv` and parses the first version number it prints.
+/// Runs `argv` and parses the version number on the first line it prints.
+/// Only that line is read before waiting for the process to exit: on macOS a
+/// process spawned concurrently by another thread can inherit the output
+/// pipe, so waiting for end of output could block for as long as it runs.
 pub fn queryArgv(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8) Error!Version {
-    const result = std.process.run(allocator, io, .{
+    _ = allocator;
+    var child = std.process.spawn(io, .{
         .argv = argv,
-        .stdout_limit = .limited(512),
-        .stderr_limit = .limited(512),
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .ignore,
     }) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return err,
     };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-    if (!result.term.success()) return error.CommandFailed;
-    return Version.parse(result.stdout);
+    var buffer: [512]u8 = undefined;
+    var reader = child.stdout.?.readerStreaming(io, &buffer);
+    const parsed = if (reader.interface.takeDelimiter('\n') catch null) |line| Version.parse(line) else error.InvalidVersion;
+    const term = try child.wait(io);
+    if (!term.success()) return error.CommandFailed;
+    return parsed;
 }
 
 /// Derives the version command from a server command line by replacing the

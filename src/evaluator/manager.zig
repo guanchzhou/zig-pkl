@@ -210,9 +210,11 @@ pub const Manager = struct {
             .known, .unchecked => null,
         };
         errdefer if (probe) |item| item.destroy();
+        // Started first so that the probe, which only prints a version, is
+        // usually done before the server answers the first creation.
+        if (probe) |item| item.start(io);
         const child = try subprocess.Subprocess.spawnWithOptions(allocator, io, argv, init_options.subprocess);
         errdefer child.deinit();
-        if (probe) |item| item.start(io);
         const self = try initWithBackendOptions(allocator, io, child.backend(), init_options);
         self.subprocess = child;
         self.probe = probe;
