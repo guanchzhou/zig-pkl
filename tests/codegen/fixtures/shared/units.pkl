@@ -1,0 +1,10 @@
+/// Units shared between packages.
+module shared.units
+
+/// An amount of money.
+class Money {
+  amount: Float
+  currency: "EUR" | "USD" = "EUR"
+}
+
+typealias Percent = Float(isBetween(0, 100))

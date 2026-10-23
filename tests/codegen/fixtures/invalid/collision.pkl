@@ -1,0 +1,4 @@
+module invalid.collision
+
+fooBar: Int = 1
+foo_bar: Int = 2

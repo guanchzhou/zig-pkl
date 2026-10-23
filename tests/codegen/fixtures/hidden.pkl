@@ -1,0 +1,13 @@
+/// An untyped override of a hidden property stays out of the bindings.
+module fixture.concealed
+
+open class Parent {
+  hidden secret: String = "a"
+  name: String = "n"
+}
+
+class Child extends Parent {
+  secret = "b"
+}
+
+child: Child = new { name = "c" }

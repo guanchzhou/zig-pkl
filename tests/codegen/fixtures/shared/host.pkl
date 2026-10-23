@@ -1,0 +1,6 @@
+module shared.host
+
+class Machine {
+  arch: String = import("pkl:platform").current.processor.architecture
+  label: String = "dependency"
+}

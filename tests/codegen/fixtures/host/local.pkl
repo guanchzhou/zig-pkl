@@ -1,0 +1,9 @@
+module fixture.hostlocal
+
+import "pkl:platform" as host
+
+local hostName = host.current.operatingSystem.name
+
+os: String = hostName
+viaOther: String = os
+label: String = "stable"

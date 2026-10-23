@@ -15,6 +15,8 @@ zig build test
 
 Format Zig sources with `zig fmt` before review.
 
+Changes to the generator or to `codegen/` need `zig build codegen-test` with Pkl installed. When generated output changes on purpose, run `zig build codegen` and commit the updated `tests/codegen/snapshots` and `examples/codegen/src/bindings`, including their `.zig-pkl-gen-manifest` files, together with the change. Set `ZIG_PKL_REQUIRE_PKL=1` to make missing Pkl a test failure instead of a skip.
+
 ## Changes
 
 Keep each change focused. Update `CHANGELOG.md` under `Unreleased` when behavior visible to users changes.

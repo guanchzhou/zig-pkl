@@ -1,0 +1,41 @@
+/// Annotations that control the Zig bindings generated for a Pkl module.
+///
+/// ```
+/// @zig.Package { name = "app.config" }
+/// module app.Config
+///
+/// import "@zig/zig.pkl"
+///
+/// @zig.Name { value = "listen_port" }
+/// port: UInt16 = 8080
+/// ```
+module zig
+
+/// Places a module's bindings at a dotted Zig path.
+///
+/// `app.config` produces `app/config.zig`, reachable from the generated index
+/// as `app.config`. Without this annotation the path is the module name.
+class Package extends Annotation {
+  /// Dot-separated Zig identifiers.
+  name: String(matches(Regex(#"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*"#)))
+}
+
+/// Overrides the Zig identifier of a class, type alias, or property.
+///
+/// Properties otherwise become `snake_case` fields; classes and type aliases
+/// keep their Pkl names.
+class Name extends Annotation {
+  /// A Zig identifier. Keywords are written with `@""` syntax automatically.
+  value: String(matches(Regex(#"[A-Za-z_][A-Za-z0-9_]*"#)), this != "_")
+}
+
+/// Per-property generation settings.
+class Field extends Annotation {
+  /// Stores the value behind a pointer. Properties that form a by-value cycle
+  /// are boxed automatically.
+  boxed: Boolean = false
+
+  /// A Zig type expression used verbatim instead of the mapped type. It must
+  /// be decodable by `zig_pkl.convert`.
+  type: String(!isEmpty)?
+}

@@ -14,8 +14,8 @@ concurrency:
 
 env:
   ZIG_VERSION: "0.17.0"
-  # Supported Pkl language version. Evaluator jobs install this release
-  # once those tests exist.
+  # Pkl release the test job installs. Each matrix entry pins the SHA-256 of
+  # its release asset; update both together.
   PKL_VERSION: "0.32.2"
 
 jobs:
@@ -23,18 +23,33 @@ jobs:
     name: test (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      # Tests fail instead of skipping when Pkl cannot be started.
+      ZIG_PKL_REQUIRE_PKL: "1"
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
             name: linux-x86_64
+            pkl_asset: pkl-linux-amd64
+            pkl_sha256: 874c75484c79add77fb2346ea4ab2e8875eea35fb707894bf5457a2df5d03def
+            pkl_file: pkl
           - runner: ubuntu-24.04-arm
             name: linux-aarch64
+            pkl_asset: pkl-linux-aarch64
+            pkl_sha256: e60744e17d4ddc0257a35260998b5f98387b5d6a5e868317cccfbebe8d962ae3
+            pkl_file: pkl
           - runner: macos-26
             name: macos-aarch64
+            pkl_asset: pkl-macos-aarch64
+            pkl_sha256: 466952f0b30c93dfa36393a5b3695159917ce4291e3c936a18a0a240cfbe98e9
+            pkl_file: pkl
           - runner: windows-2025
             name: windows-x86_64
+            pkl_asset: pkl-windows-amd64.exe
+            pkl_sha256: ac3c55c2e43c20964dc5faf51e47bf73a90150dfe1874aa37753651753edf201
+            pkl_file: pkl.exe
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +62,29 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
           use-cache: false
 
+      - name: Install Pkl
+        shell: bash
+        env:
+          PKL_ASSET: ${{ matrix.pkl_asset }}
+          PKL_SHA256: ${{ matrix.pkl_sha256 }}
+          PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PKL_EXEC")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$PKL_EXEC" "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/${PKL_ASSET}"
+          if command -v sha256sum > /dev/null; then
+            actual="$(sha256sum "$PKL_EXEC" | cut -d ' ' -f 1)"
+          else
+            actual="$(shasum -a 256 "$PKL_EXEC" | cut -d ' ' -f 1)"
+          fi
+          if [ "$actual" != "$PKL_SHA256" ]; then
+            echo "::error::SHA-256 of ${PKL_ASSET} is ${actual}, expected ${PKL_SHA256}"
+            exit 1
+          fi
+          chmod +x "$PKL_EXEC"
+          "$PKL_EXEC" --version
+
       - name: Format
         run: zig fmt --check .
 
@@ -54,7 +92,29 @@ jobs:
         run: zig build
 
       - name: Test
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
         run: zig build test
+
+      - name: Integration tests
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
+        run: zig build integration-test
+
+      - name: Code generation tests
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
+        run: zig build codegen-test
+
+      - name: Checked-in bindings are current
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
+        run: zig build codegen -- --check
+
+      - name: ReleaseSafe tests
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
+        run: zig build test integration-test codegen-test -Doptimize=ReleaseSafe
 
   cross:
     name: cross (${{ matrix.target }})

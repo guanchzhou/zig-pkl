@@ -1,0 +1,79 @@
+/// Settings for a fixture service.
+@zig.Package { name = "fixture.app" }
+module fixture.App
+
+import "@zig/zig.pkl"
+import "@shared/units.pkl"
+import "geometry.pkl"
+import "graph/a.pkl"
+
+/// Display name.
+name: String = "service"
+enabled: Boolean = true
+port: Port = 8080
+retries: Int8 = -3
+ratio: Float = 0.25
+big: Int = 9007199254740993
+grade: Char = "A"
+nickname: String?
+tags: Listing<String>
+ids: List<Int>
+unique: Set<String>
+labels: Mapping<String, String>
+weights: Map<String, Float>
+limits: Pair<Int, String>
+timeout: Duration = 30.s
+memory: DataSize = 512.mb
+pattern: Regex
+payload: Bytes
+range: IntSeq
+mode: Mode = "slow-start"
+value: String | Int | geometry.Shape
+choice: (Int | Boolean)?
+shapes: Listing<geometry.Shape>
+tree: geometry.Tree
+price: units.Money
+discount: units.Percent = 10.0
+graph: a
+nested: Map<String, Listing<Pair<Int, Boolean>>>
+named: Named<Int>
+
+@zig.Name { value = "listen_address" }
+address: String = "127.0.0.1"
+
+@zig.Field { type = "[]const u8" }
+raw: String
+
+@zig.Field { boxed = true }
+server: Server?
+
+tls: TlsServer
+chain: geometry.Link
+endpoint: Endpoint
+floats_first: Listing<Float | Int>
+ints_first: Listing<Int | Float>
+
+hidden secret: String = "not exported"
+
+typealias Port = UInt16
+
+typealias Mode = "fast" | "slow-start"
+
+typealias Named<T> = Mapping<String, T>
+
+open class Server {
+  host: String
+  /// Port to connect to.
+  @zig.Name { value = "listen_port" }
+  port: Port = 443
+}
+
+class TlsServer extends Server {
+  port = 8443
+  certificate: String
+}
+
+local class Endpoint {
+  url: String
+  weight: Int = 1
+}

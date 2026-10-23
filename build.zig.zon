@@ -74,6 +74,8 @@
         "src",
         "tests",
         "fuzz",
+        "codegen",
+        "examples",
         "LICENSE",
         "README.md",
     },

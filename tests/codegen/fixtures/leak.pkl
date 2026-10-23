@@ -1,0 +1,7 @@
+/// Defaults that read resources must not be copied into the bindings.
+module fixture.leak
+
+token: String = read("leak.secret").text
+home: String = read("env:HOME")
+property: String? = read?("prop:zig.pkl.leak")
+safe: String = "public"

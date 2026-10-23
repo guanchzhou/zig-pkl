@@ -1,0 +1,10 @@
+module fixture.hostescaped
+
+local p = import("pkl:\u{70}latform")
+
+arch: String = import("pkl:\u{70}latform").current.processor.architecture
+viaLocal: String = p.current.processor.architecture
+split: String =
+import(
+"pkl:\u{70}latform").current.operatingSystem.name
+label: String = "stable"

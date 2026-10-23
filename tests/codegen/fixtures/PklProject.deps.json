@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "resolvedDependencies": {
+    "package://example.com/shared@1": {
+      "type": "local",
+      "uri": "projectpackage://example.com/shared@1.0.0",
+      "path": "shared"
+    },
+    "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0": {
+      "type": "local",
+      "uri": "projectpackage://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0.0.0",
+      "path": "../../../codegen"
+    }
+  }
+}

@@ -17,6 +17,7 @@ pub const project = @import("evaluator/project.zig");
 pub const external_client = @import("evaluator/external.zig");
 pub const options = @import("evaluator/options.zig");
 pub const manager = @import("evaluator/manager.zig");
+pub const codegen = @import("codegen.zig");
 
 pub const Message = protocol.Message;
 pub const OwnedMessage = protocol.Owned;
@@ -58,4 +59,5 @@ test {
     _ = external_client;
     _ = options;
     _ = manager;
+    _ = codegen;
 }

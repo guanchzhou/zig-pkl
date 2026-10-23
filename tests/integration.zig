@@ -34,11 +34,18 @@ fn openManager(allocator: std.mem.Allocator, io: std.Io) !*zig_pkl.Manager {
     return zig_pkl.Manager.init(allocator, io, &.{ executable.path, "server" }, zig_pkl.Logger.noop);
 }
 
+/// A missing Pkl skips the test unless `ZIG_PKL_REQUIRE_PKL=1`.
 fn skipWithoutPkl(err: anyerror) anyerror {
     return switch (err) {
-        error.FileNotFound => error.SkipZigTest,
+        error.FileNotFound => if (pklRequired()) error.PklRequired else error.SkipZigTest,
         else => err,
     };
+}
+
+fn pklRequired() bool {
+    const flag = std.process.Environ.getAlloc(std.testing.environ, std.testing.allocator, "ZIG_PKL_REQUIRE_PKL") catch return false;
+    defer std.testing.allocator.free(flag);
+    return std.mem.eql(u8, flag, "1");
 }
 
 fn fileUri(allocator: std.mem.Allocator, io: std.Io, relative: []const u8) ![]u8 {

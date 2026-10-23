@@ -1,0 +1,5 @@
+module zig
+
+class Name extends Annotation {
+  value: String
+}

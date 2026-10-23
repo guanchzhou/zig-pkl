@@ -1,0 +1,26 @@
+amends "Service.pkl"
+
+port = 3000
+logLevel = "debug"
+
+routes {
+  new {
+    path = "/api"
+    backend = "api"
+    methods { "POST" }
+  }
+  new {
+    path = "/"
+    backend = "assets"
+  }
+}
+
+backends {
+  ["api"] = new HttpBackend {
+    url = "http://127.0.0.1:9000"
+    weight = 3
+  }
+  ["assets"] = new StaticBackend {
+    directory = "public"
+  }
+}

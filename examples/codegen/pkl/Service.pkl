@@ -1,0 +1,50 @@
+/// Configuration for an HTTP service.
+@zig.Package { name = "service" }
+module example.Service
+
+import "@zig/zig.pkl"
+
+/// Address to listen on.
+host: String = "127.0.0.1"
+
+@zig.Name { value = "listen_port" }
+port: UInt16 = 8080
+
+/// Time allowed for a request before it is canceled.
+timeout: Duration = 5.s
+
+maxBody: DataSize = 1.mib
+
+logLevel: "debug" | "info" | "warn" = "info"
+
+routes: Listing<Route>
+
+backends: Mapping<String, Backend>
+
+tls: Tls?
+
+class Route {
+  path: String
+  /// Key into [backends].
+  backend: String
+  methods: Listing<Method> = new { "GET" }
+}
+
+typealias Method = "GET" | "POST" | "PUT" | "DELETE"
+
+abstract class Backend {
+  weight: Int = 1
+}
+
+class HttpBackend extends Backend {
+  url: String
+}
+
+class StaticBackend extends Backend {
+  directory: String
+}
+
+class Tls {
+  certificate: String
+  key: String
+}

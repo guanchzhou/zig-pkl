@@ -1,0 +1,395 @@
+/// Reflection data read by the Zig binding generator.
+///
+/// [describe] walks every module reachable from its targets through class,
+/// type alias, superclass, and property types. `pkl:base` and `pkl:ref` are
+/// never walked; the generator maps their types directly.
+///
+/// Annotations count only when their class comes from the zig-pkl
+/// annotations package; look-alikes are listed in
+/// [ModuleInfo.foreign_annotations].
+module zig.Schema
+
+import "pkl:reflect"
+import "pkl:test"
+
+class Description {
+  roots: List<String>
+  modules: List<ModuleInfo>
+}
+
+class ModuleInfo {
+  uri: String
+  name: String
+  package_name: String?
+  zig_name: String?
+  location: String
+  doc: String?
+  module_class: ClassInfo
+  /// Declared classes, then local classes that the module's types use.
+  classes: List<ClassInfo>
+  /// Declared type aliases, then local type aliases that the module's types use.
+  aliases: List<AliasInfo>
+  foreign_annotations: List<ForeignAnnotation>
+}
+
+class ForeignAnnotation {
+  location: String
+  module_uri: String
+}
+
+class ClassInfo {
+  name: String
+  zig_name: String?
+  location: String
+  doc: String?
+  is_abstract: Boolean
+  is_open: Boolean
+  superclass: ClassRef?
+  properties: List<PropertyInfo>
+}
+
+class ClassRef {
+  module_uri: String
+  /// `null` for a module class.
+  name: String?
+}
+
+class PropertyInfo {
+  name: String
+  zig_name: String?
+  location: String
+  doc: String?
+  type: TypeInfo
+  boxed: Boolean
+  zig_type: String?
+  default: DefaultInfo?
+}
+
+/// A default value. Lists carry their elements in [items]; maps carry
+/// alternating keys and values. `failed` is a default that could not be
+/// evaluated, for example because it reads a resource.
+class DefaultInfo {
+  kind: "bool" | "int" | "float" | "string" | "null" | "duration" | "data_size" | "list" | "map" | "object" | "other" | "failed"
+  text: String = ""
+  unit: String?
+  items: List<DefaultInfo> = List()
+}
+
+class AliasInfo {
+  name: String
+  zig_name: String?
+  location: String
+  doc: String?
+  params: List<String>
+  referent: TypeInfo
+}
+
+class TypeInfo {
+  kind: "class" | "module_class" | "alias" | "self_module" | "nullable" | "union" | "literal" | "function" | "unknown" | "nothing" | "variable"
+  module_uri: String?
+  name: String?
+  args: List<TypeInfo>
+}
+
+/// URIs of the modules [describe] would emit. The generator allows `read` of
+/// exactly these URIs so default detection can see their source.
+function describedUris(targets: List<Module>): List<String> =
+  let (effective = targets.map((target) -> reflect.Module(target).moduleClass.enclosingDeclaration))
+    closure(Map(), effective).keys.toList()
+
+/// Describes [targets] and every module reachable from them.
+///
+/// A module that amends another is described through the module that
+/// declares its class.
+function describe(targets: List<Module>): Description =
+  let (effective = targets.map((target) -> reflect.Module(target).moduleClass.enclosingDeclaration))
+    new Description {
+      roots = effective.map((it) -> it.uri).distinct
+      modules = closure(Map(), effective).values.map((it) -> moduleInfo(it))
+    }
+
+local function closure(seen: Map<String, reflect.Module>, queue: List<reflect.Module>): Map<String, reflect.Module> =
+  if (queue.isEmpty) seen
+  else
+    let (head = queue.first)
+      if (isBuiltin(head.uri) || seen.containsKey(head.uri)) closure(seen, queue.drop(1))
+      else closure(seen.put(head.uri, head), queue.drop(1) + references(head))
+
+local function isBuiltin(uri: String): Boolean = uri == "pkl:base" || uri == "pkl:ref"
+
+local function references(m: reflect.Module): List<reflect.Module> =
+  let (classes = List(m.moduleClass) + allClasses(m))
+    (classes.flatMap((c) -> superModules(c) + c.properties.values.flatMap((p) -> typeModules(p.type)))
+      + allAliases(m).flatMap((a) -> typeModules(a.referent)))
+      .distinctBy((it) -> it.uri)
+
+local function allClasses(m: reflect.Module): List<reflect.Class> =
+  m.classes.values + localDeclarations(m).filter((d) -> d is reflect.Class) as List<reflect.Class>
+
+local function allAliases(m: reflect.Module): List<reflect.TypeAlias> =
+  m.typeAliases.values + localDeclarations(m).filter((d) -> d is reflect.TypeAlias) as List<reflect.TypeAlias>
+
+/// Local classes and type aliases of [m] that its other declarations use,
+/// directly or through each other.
+local function localDeclarations(m: reflect.Module): List<reflect.Class | reflect.TypeAlias> =
+  localWalk(m, List(), List(m.moduleClass) + m.classes.values, m.typeAliases.values)
+
+local function localWalk(
+  m: reflect.Module,
+  found: List<reflect.Class | reflect.TypeAlias>,
+  classes: List<reflect.Class>,
+  aliases: List<reflect.TypeAlias>
+): List<reflect.Class | reflect.TypeAlias> =
+  let (used = classes.flatMap((c) -> superDeclarations(c) + c.properties.values.flatMap((p) -> typeDeclarations(p.type)))
+      + aliases.flatMap((a) -> typeDeclarations(a.referent)))
+    let (fresh = used
+        .filter((d) -> d.enclosingDeclaration.uri == m.uri && !isDeclared(m, d) && !found.any((f) -> sameDeclaration(f, d)))
+        .distinctBy((d) -> "\(d is reflect.Class)\(d.name)"))
+      if (fresh.isEmpty) found
+      else localWalk(
+        m,
+        found + fresh,
+        fresh.filter((d) -> d is reflect.Class) as List<reflect.Class>,
+        fresh.filter((d) -> d is reflect.TypeAlias) as List<reflect.TypeAlias>
+      )
+
+local function isDeclared(m: reflect.Module, d: reflect.Class | reflect.TypeAlias): Boolean =
+  if (d is reflect.TypeAlias) m.typeAliases.containsKey(d.name)
+  else isModuleClass(d) || m.classes.containsKey(d.name)
+
+local function sameDeclaration(left: reflect.Class | reflect.TypeAlias, right: reflect.Class | reflect.TypeAlias): Boolean =
+  (left is reflect.Class) == (right is reflect.Class) && left.name == right.name
+
+local function superDeclarations(c: reflect.Class): List<reflect.Class> =
+  if (c.superclass == null) List() else List(c.superclass)
+
+local function typeDeclarations(t: reflect.Type): List<reflect.Class | reflect.TypeAlias> =
+  if (t is reflect.DeclaredType) List(t.referent) + t.typeArguments.flatMap((it) -> typeDeclarations(it))
+  else if (t is reflect.NullableType) typeDeclarations(t.member)
+  else if (t is reflect.UnionType) t.members.flatMap((it) -> typeDeclarations(it))
+  else List()
+
+local function superModules(c: reflect.Class): List<reflect.Module> =
+  if (c.superclass == null) List() else List(c.superclass.enclosingDeclaration)
+
+local function typeModules(t: reflect.Type): List<reflect.Module> =
+  if (t is reflect.DeclaredType) List(t.referent.enclosingDeclaration) + t.typeArguments.flatMap((it) -> typeModules(it))
+  else if (t is reflect.NullableType) typeModules(t.member)
+  else if (t is reflect.UnionType) t.members.flatMap((it) -> typeModules(it))
+  else List()
+
+local function moduleInfo(m: reflect.Module): ModuleInfo =
+  let (moduleClasses = allClasses(m))
+    let (moduleAliases = allAliases(m))
+      new {
+        uri = m.uri
+        name = m.name
+        package_name = annotationValue(m, "Package", "name")
+        zig_name = annotationValue(m, "Name", "value")
+        location = locationOf(m)
+        doc = m.docComment
+        module_class = classInfo(m.moduleClass)
+        classes = moduleClasses.map((it) -> classInfo(it))
+        aliases = moduleAliases.map((it) -> aliasInfo(it))
+        foreign_annotations = (List(m) + moduleClasses + moduleAliases
+          + (List(m.moduleClass) + moduleClasses).flatMap((c) -> c.properties.values))
+          .flatMap((d) -> foreignAnnotations(d))
+      }
+
+local function classInfo(c: reflect.Class): ClassInfo = new {
+  name = c.name
+  zig_name = annotationValue(c, "Name", "value")
+  location = locationOf(c)
+  doc = c.docComment
+  is_abstract = c.modifiers.contains("abstract")
+  is_open = c.modifiers.contains("open")
+  superclass = classRef(c.superclass)
+  properties = c.properties.values.filter((p) -> !p.allModifiers.contains("hidden")).map((it) -> propertyInfo(it, c.enclosingDeclaration))
+}
+
+local function classRef(c: reflect.Class?): ClassRef? =
+  if (c == null || isBuiltin(c.enclosingDeclaration.uri)) null
+  else new ClassRef {
+    module_uri = c.enclosingDeclaration.uri
+    name = if (isModuleClass(c)) null else c.name
+  }
+
+local function isModuleClass(c: reflect.Class): Boolean = c.reflectee == c.enclosingDeclaration.moduleClass.reflectee
+
+local function propertyInfo(p: reflect.Property, owner: reflect.Module): PropertyInfo = new {
+  name = p.name
+  zig_name = annotationValue(p, "Name", "value")
+  location = locationOf(p)
+  doc = p.docComment
+  type = typeInfo(p.type)
+  boxed = annotationValue(p, "Field", "boxed") == true
+  zig_type = annotationValue(p, "Field", "type")
+  default = defaultInfo(p, owner)
+}
+
+local function aliasInfo(a: reflect.TypeAlias): AliasInfo = new {
+  name = a.name
+  zig_name = annotationValue(a, "Name", "value")
+  location = locationOf(a)
+  doc = a.docComment
+  params = a.typeParameters.map((it) -> it.name)
+  referent = typeInfo(a.referent)
+}
+
+local function defaultInfo(p: reflect.Property, owner: reflect.Module): DefaultInfo? =
+  if (referencesPlatform(p, owner)) failedDefault
+  else if (test.catchOrNull(() -> p.defaultValue) != null) failedDefault
+  else if (p.defaultValue == null) null
+  else if (test.catchOrNull(() -> new PcfRenderer {}.renderValue(valueInfo(p.defaultValue))) != null) failedDefault
+  else valueInfo(p.defaultValue)
+
+local failedDefault: DefaultInfo = new { kind = "failed" }
+
+/// `pkl:platform` is part of the standard library, so the module allowlist
+/// cannot block it. A default that names it, and any non-literal default in
+/// a module that imports it, would copy the host into the bindings.
+///
+/// A module whose source cannot be read is treated as if every default named
+/// `pkl:platform`, so a skipped check never copies a host value.
+local function referencesPlatform(p: reflect.Property, owner: reflect.Module): Boolean =
+  let (source = moduleSource(owner))
+    let (text = declarationText(source, p.location.line))
+      source.isEmpty
+        || amendsPlatform(owner)
+        || text.contains("pkl:platform")
+        || opaqueImport(text)
+        || (mentionsPlatform(owner, source) && !plainLiteral(text))
+
+/// An `import(...)` expression whose argument is not a plain string, or
+/// whose string contains an escape, could name `pkl:platform` in a form the
+/// text match does not see.
+local function opaqueImport(text: String): Boolean =
+  text.contains(Regex(#"\bimport\*?\s*\(\s*(?:[^"\s]|"[^"]*\\)"#))
+
+/// `catchOrNull` returns null when the function succeeds and the thrown value
+/// when it fails. A denied read leaves the source empty.
+local function moduleSource(m: reflect.Module): String =
+  if (test.catchOrNull(() -> read(m.uri).text) != null) ""
+  else read(m.uri).text
+
+local function amendsPlatform(m: reflect.Module): Boolean =
+  m.supermodule != null && m.supermodule.uri.startsWith("pkl:platform")
+
+local function mentionsPlatform(m: reflect.Module, source: String): Boolean =
+  source.contains("pkl:platform") || opaqueImport(source) || (test.catchOrNull(() -> m.imports) == null && m.imports.keys.any((name) -> m.imports[name].startsWith("pkl:platform")))
+
+/// The value is a literal scalar, so it cannot observe the host. Anything
+/// else in a module that mentions `pkl:platform` is left unevaluated, which
+/// covers locals and same-module references.
+local function plainLiteral(text: String): Boolean =
+  valueExpression(text).matches(Regex(#"^(?:"(?:[^"\\]|\\.)*"|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:\.(?:ns|us|ms|s|min|h|d|b|kb|mb|gb|tb|pb|kib|mib|gib|tib|pib))?)$"#))
+
+local function valueExpression(text: String): String =
+  let (cut = assignmentIndex(text, 0, 0, false))
+    if (cut == null) "" else text.drop(cut + 1).trim()
+
+local function assignmentIndex(text: String, index: Int, depth: Int, inString: Boolean): Int? =
+  if (index >= text.length) null
+  else if (inString && index + 1 < text.length && text[index] == "\\") assignmentIndex(text, index + 2, depth, true)
+  else if (inString) assignmentIndex(text, index + 1, depth, text[index] != "\"")
+  else if (text[index] == "\"") assignmentIndex(text, index + 1, depth, true)
+  else if (text[index] == "(" || text[index] == "[" || text[index] == "{") assignmentIndex(text, index + 1, depth + 1, false)
+  else if ((text[index] == ")" || text[index] == "]" || text[index] == "}") && depth > 0) assignmentIndex(text, index + 1, depth - 1, false)
+  else if (text[index] == "=" && depth == 0) index
+  else assignmentIndex(text, index + 1, depth, false)
+
+local function declarationText(source: String, lineNumber: Int): String =
+  let (lines = source.split("\n"))
+    let (index = lineNumber - 1)
+      if (index < 0 || index >= lines.length) ""
+      else
+        let (first = lines[index])
+          let (indent = indentation(first))
+            let (rest = lines.drop(index + 1).takeWhile((line) -> continuation(line, indent)))
+              (List(first) + rest).join("\n")
+
+local function indentation(line: String): Int = line.takeWhile((char) -> char == " " || char == "\t").length
+
+local function continuation(line: String, indent: Int): Boolean =
+  line.matches(Regex(#"^\s*$"#)) || indentation(line) > indent
+
+local function valueInfo(v: Any): DefaultInfo =
+  if (v == null) new DefaultInfo { kind = "null" }
+  else if (v is Boolean) new DefaultInfo { kind = "bool"; text = v.toString() }
+  else if (v is Int) new DefaultInfo { kind = "int"; text = v.toString() }
+  else if (v is Float) new DefaultInfo { kind = "float"; text = v.toString() }
+  else if (v is String) new DefaultInfo { kind = "string"; text = v }
+  else if (v is Duration) new DefaultInfo { kind = "duration"; text = v.value.toString(); unit = v.unit }
+  else if (v is DataSize) new DefaultInfo { kind = "data_size"; text = v.value.toString(); unit = v.unit }
+  else if (v is Listing) listInfo(v.toList())
+  else if (v is List) listInfo(v)
+  else if (v is Set) listInfo(v.toList())
+  else if (v is Mapping) mapInfo(v.toMap())
+  else if (v is Map) mapInfo(v)
+  else if (v is Typed || v is Dynamic) new DefaultInfo { kind = "object" }
+  else new DefaultInfo { kind = "other" }
+
+local function listInfo(elements: List): DefaultInfo = new {
+  kind = "list"
+  items = elements.map((it) -> valueInfo(it))
+}
+
+local function mapInfo(entries: Map): DefaultInfo = new {
+  kind = "map"
+  items = entries.keys.toList().flatMap((key) -> List(valueInfo(key), valueInfo(entries[key])))
+}
+
+local function typeInfo(t: reflect.Type): TypeInfo =
+  if (t is reflect.DeclaredType)
+    let (r = t.referent)
+      if (r is reflect.TypeAlias) declared("alias", r.enclosingDeclaration.uri, r.name, t.typeArguments)
+      else if (isModuleClass(r as reflect.Class)) declared("module_class", r.enclosingDeclaration.uri, null, List())
+      else declared("class", r.enclosingDeclaration.uri, r.name, t.typeArguments)
+  else if (t is reflect.NullableType) simple("nullable", null, List(typeInfo(t.member)))
+  else if (t is reflect.UnionType) simple("union", null, t.members.map((it) -> typeInfo(it)))
+  else if (t is reflect.StringLiteralType) simple("literal", t.value, List())
+  else if (t is reflect.FunctionType) simple("function", null, List())
+  else if (t is reflect.ModuleType) simple("self_module", null, List())
+  else if (t is reflect.NothingType) simple("nothing", null, List())
+  else if (t is reflect.TypeVariable) simple("variable", t.referent.name, List())
+  else simple("unknown", null, List())
+
+local function declared(typeKind: String, moduleUri: String, typeName: String?, typeArgs: List<reflect.Type>): TypeInfo = new {
+  kind = typeKind
+  module_uri = moduleUri
+  name = typeName
+  args = typeArgs.map((it) -> typeInfo(it))
+}
+
+local function simple(typeKind: String, typeName: String?, typeArgs: List<TypeInfo>): TypeInfo = new {
+  kind = typeKind
+  module_uri = null
+  name = typeName
+  args = typeArgs
+}
+
+local function annotationValue(decl: reflect.Declaration, className: String, property: String): Any =
+  let (found = decl.annotations.findOrNull((a) -> isZigAnnotation(a, className)))
+    if (found == null) null else found.getPropertyOrNull(property)
+
+local zigClasses = Set("Package", "Name", "Field")
+
+local function isZigAnnotation(a: Annotation, className: String): Boolean =
+  let (c = reflect.Class(a.getClass()))
+    c.name == className && isTrustedModule(c.enclosingDeclaration.uri)
+
+/// The annotations module of the zig-pkl package, as a published or a local
+/// project dependency.
+local function isTrustedModule(uri: String): Boolean =
+  uri.matches(Regex(#"(project)?package://pkg\.pkl-lang\.org/github\.com/guanchzhou/zig-pkl/zig@[^#/]+#/zig\.pkl"#))
+
+local function foreignAnnotations(decl: reflect.Declaration): List<ForeignAnnotation> =
+  decl.annotations
+    .map((a) -> reflect.Class(a.getClass()))
+    .filter((c) -> zigClasses.contains(c.name) && c.enclosingDeclaration.name == "zig" && !isTrustedModule(c.enclosingDeclaration.uri))
+    .map((c) -> new ForeignAnnotation { location = locationOf(decl); module_uri = c.enclosingDeclaration.uri })
+
+local function locationOf(decl: reflect.Declaration): String =
+  let (display = decl.location.displayUri)
+    let (cut = display.lastIndexOfOrNull(", line "))
+      "\(if (cut == null) display else display.take(cut)):\(decl.location.line):\(decl.location.column)"

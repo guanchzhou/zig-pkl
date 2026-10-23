@@ -1,0 +1,5 @@
+module fixture.hostuse
+
+import "types.pkl"
+
+t: types.Host

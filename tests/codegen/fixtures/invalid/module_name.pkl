@@ -1,0 +1,6 @@
+@zig.Name { value = "Renamed" }
+module invalid.module_name
+
+import "@zig/zig.pkl"
+
+value: Int = 1

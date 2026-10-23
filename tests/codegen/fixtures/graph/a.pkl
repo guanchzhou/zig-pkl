@@ -1,0 +1,11 @@
+module fixture.graph.a
+
+import "b.pkl"
+
+name: String = "a"
+peer: b?
+
+class Node {
+  weight: Int
+  next: b.Node?
+}

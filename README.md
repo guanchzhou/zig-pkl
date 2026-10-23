@@ -17,9 +17,21 @@ This package is unreleased (`0.0.0`). The module name is `zig_pkl`. The public A
 ```sh
 zig build
 zig build test
-zig build integration-test   # uses PKL_EXEC or pkl on PATH; skips when absent
+zig build integration-test   # uses PKL_EXEC or pkl on PATH; skips when absent unless ZIG_PKL_REQUIRE_PKL=1
 zig build fuzz               # bounded; tune with -Dfuzz-iterations and -Dfuzz-seed
+zig build codegen            # regenerate checked-in bindings; needs Pkl
+zig build codegen-test       # generator tests; live parts skip without Pkl unless ZIG_PKL_REQUIRE_PKL=1
 ```
+
+## Code generation
+
+`zig-pkl-gen` generates Zig types, with `decode`, `deinit`, and `load` helpers, from Pkl modules annotated with the `@zig` package in [`codegen/`](codegen):
+
+```sh
+zig-pkl-gen --library path/to/zig-pkl --project-dir . -o src/bindings pkl/Service.pkl
+```
+
+See [docs/codegen.md](docs/codegen.md) for the type mapping, annotations, and build integration, and [examples/codegen](examples/codegen) for a consumer package.
 
 ## Limitations
 

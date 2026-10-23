@@ -1,0 +1,6 @@
+module invalid.foreign
+
+import "zig.pkl"
+
+@zig.Name { value = "renamed" }
+value: Int = 1

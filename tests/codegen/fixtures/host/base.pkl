@@ -1,0 +1,7 @@
+/// Shared schema. Host details stay out of the bindings.
+module fixture.hostbase
+
+import "pkl:platform"
+
+os: String = platform.current.operatingSystem.name
+label: String = "stable"

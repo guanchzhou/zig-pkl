@@ -1,0 +1,30 @@
+/// Shapes and trees.
+module fixture.geometry
+
+abstract class Shape {
+  label: String?
+}
+
+class Circle extends Shape {
+  radius: Float
+}
+
+class Square extends Shape {
+  side: Float
+}
+
+/// A tree that contains itself by value through [left] and by reference
+/// through [children].
+class Tree {
+  value: Int
+  children: Listing<Tree>
+  left: Tree?
+}
+
+typealias MaybeLink = Link?
+
+/// A list whose links refer to each other through a nullable alias.
+class Link {
+  id: Int
+  next: MaybeLink
+}

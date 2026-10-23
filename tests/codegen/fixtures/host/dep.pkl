@@ -1,0 +1,5 @@
+module fixture.hostdep
+
+import "@shared/host.pkl"
+
+machine: host.Machine

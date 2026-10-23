@@ -1,0 +1,21 @@
+/// References into a build domain.
+module fixture.refs
+
+import "pkl:ref"
+
+class Ci extends ref.Domain {
+  name: String
+
+  function renderReference(reference: ref.Reference<ref.Domain, Any>): String = name
+}
+
+class Step {
+  run: String
+  tags: Listing<String>
+}
+
+domain: Ci = new { name = "ci" }
+step: ref.Reference<Ci, Step> = ref.Reference(domain, Step, "build")
+run: ref.Reference<Ci, String> = step.run
+tag: ref.Reference<Ci, String> = step.tags[1]
+path: List<ref.Access> = tag.getPath()

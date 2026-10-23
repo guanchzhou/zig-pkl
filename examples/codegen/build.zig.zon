@@ -1,0 +1,17 @@
+.{
+    .name = .zig_pkl_codegen_example,
+    .version = "0.0.0",
+    .fingerprint = 0x462cc7665d2b2d8b,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .zig_pkl = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "PklProject",
+        "PklProject.deps.json",
+        "pkl",
+        "src",
+    },
+}

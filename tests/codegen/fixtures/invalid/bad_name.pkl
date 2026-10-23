@@ -1,0 +1,6 @@
+module invalid.bad_name
+
+import "@zig/zig.pkl"
+
+@zig.Name { value = "not valid" }
+count: Int = 1

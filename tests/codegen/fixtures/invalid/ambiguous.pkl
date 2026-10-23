@@ -1,0 +1,3 @@
+module invalid.ambiguous
+
+values: List<Int> | Set<Int>

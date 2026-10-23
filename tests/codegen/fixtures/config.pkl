@@ -1,0 +1,47 @@
+amends "app.pkl"
+
+import "geometry.pkl"
+import "graph/a.pkl"
+import "graph/b.pkl"
+
+nickname = "svc"
+tags { "edge"; "blue" }
+ids = List(1, 2, 3)
+unique = Set("x", "y")
+labels { ["team"] = "core" }
+weights = Map("cpu", 0.5)
+limits = Pair(10, "requests")
+pattern = Regex(#"\d+"#)
+payload = Bytes(1, 2, 255)
+range = IntSeq(0, 10).step(5)
+value = new geometry.Circle { radius = 2.0 }
+choice = true
+shapes {
+  new geometry.Square { side = 3.0; label = "box" }
+  new geometry.Circle { radius = 1.0 }
+}
+tree {
+  value = 1
+  children {
+    new { value = 2 }
+  }
+  left { value = 3 }
+}
+price { amount = 9.5 }
+graph {
+  peer = (b) {
+    peer = null
+  }
+}
+nested = Map("pairs", new Listing { Pair(1, true) })
+named { ["one"] = 1 }
+raw = "verbatim"
+server = new TlsServer { host = "example.com"; certificate = "pem" }
+tls { host = "secure.example.com"; certificate = "pem" }
+chain {
+  id = 1
+  next = new geometry.Link { id = 2 }
+}
+endpoint { url = "https://api.example.com" }
+floats_first { 1; 1.5 }
+ints_first { 1; 1.5 }

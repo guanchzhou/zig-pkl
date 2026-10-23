@@ -290,6 +290,96 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, value: *const Value) (std.Io.Wr
     return out.toOwnedSlice();
 }
 
+/// Deep-copies `source` into a new tree whose arena uses `allocator`.
+pub fn clone(allocator: std.mem.Allocator, source: *const Value) error{OutOfMemory}!Tree {
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = .init(allocator);
+    errdefer {
+        arena.deinit();
+        allocator.destroy(arena);
+    }
+    const root = try cloneInto(arena.allocator(), source);
+    return .{ .arena = arena, .root = root, .bytes_read = 0 };
+}
+
+/// Deep-copies `source` with `allocator`, which is usually an arena: a
+/// partial copy is not released when allocation fails.
+pub fn cloneInto(allocator: std.mem.Allocator, source: *const Value) error{OutOfMemory}!*Value {
+    const out = try allocator.create(Value);
+    out.* = switch (source.*) {
+        .nil, .boolean, .int, .float, .function, .int_seq => source.*,
+        .string => |text| .{ .string = try allocator.dupe(u8, text) },
+        .regex => |text| .{ .regex = try allocator.dupe(u8, text) },
+        .bytes => |data| .{ .bytes = try allocator.dupe(u8, data) },
+        .duration => |quantity| .{ .duration = try cloneQuantity(allocator, quantity) },
+        .data_size => |quantity| .{ .data_size = try cloneQuantity(allocator, quantity) },
+        .class => |name| .{ .class = try cloneTypeName(allocator, name) },
+        .type_alias => |name| .{ .type_alias = try cloneTypeName(allocator, name) },
+        .list => |items| .{ .list = try cloneSequence(allocator, items) },
+        .listing => |items| .{ .listing = try cloneSequence(allocator, items) },
+        .set => |items| .{ .set = try cloneSequence(allocator, items) },
+        .map => |entries| .{ .map = try cloneEntries(allocator, entries) },
+        .mapping => |entries| .{ .mapping = try cloneEntries(allocator, entries) },
+        .pair => |pair| .{ .pair = .{
+            .first = try cloneInto(allocator, pair.first),
+            .second = try cloneInto(allocator, pair.second),
+        } },
+        .reference => |reference| .{ .reference = .{
+            .domain = try cloneInto(allocator, reference.domain),
+            .data = try cloneInto(allocator, reference.data),
+            .path = try cloneSequence(allocator, reference.path),
+        } },
+        .object => |object| blk: {
+            const members = try allocator.alloc(Member, object.members.len);
+            for (object.members, members) |member, *slot| {
+                slot.* = switch (member) {
+                    .property => |property| .{ .property = .{
+                        .name = try allocator.dupe(u8, property.name),
+                        .value = try cloneInto(allocator, property.value),
+                    } },
+                    .entry => |entry| .{ .entry = .{
+                        .key = try cloneInto(allocator, entry.key),
+                        .value = try cloneInto(allocator, entry.value),
+                    } },
+                    .element => |element| .{ .element = .{
+                        .index = element.index,
+                        .value = try cloneInto(allocator, element.value),
+                    } },
+                };
+            }
+            break :blk .{ .object = .{
+                .class_name = try allocator.dupe(u8, object.class_name),
+                .module_uri = try allocator.dupe(u8, object.module_uri),
+                .members = members,
+            } };
+        },
+    };
+    return out;
+}
+
+fn cloneQuantity(allocator: std.mem.Allocator, quantity: Quantity) error{OutOfMemory}!Quantity {
+    return .{ .value = quantity.value, .unit = try allocator.dupe(u8, quantity.unit) };
+}
+
+fn cloneTypeName(allocator: std.mem.Allocator, name: TypeName) error{OutOfMemory}!TypeName {
+    return .{ .name = try allocator.dupe(u8, name.name), .module_uri = try allocator.dupe(u8, name.module_uri) };
+}
+
+fn cloneSequence(allocator: std.mem.Allocator, items: []*Value) error{OutOfMemory}![]*Value {
+    const out = try allocator.alloc(*Value, items.len);
+    for (items, out) |item, *slot| slot.* = try cloneInto(allocator, item);
+    return out;
+}
+
+fn cloneEntries(allocator: std.mem.Allocator, entries: []Entry) error{OutOfMemory}![]Entry {
+    const out = try allocator.alloc(Entry, entries.len);
+    for (entries, out) |entry, *slot| slot.* = .{
+        .key = try cloneInto(allocator, entry.key),
+        .value = try cloneInto(allocator, entry.value),
+    };
+    return out;
+}
+
 pub fn eql(left: *const Value, right: *const Value) bool {
     if (std.meta.activeTag(left.*) != std.meta.activeTag(right.*)) return false;
     return switch (left.*) {
@@ -705,6 +795,12 @@ test "primitives and every container identity round-trip" {
     try roundtrip(&bytes);
     try roundtrip(&object);
     try roundtrip(&reference);
+
+    for ([_]*const Value{ &list, &map, &pair, &duration, &int_seq, &class, &bytes, &object, &reference }) |original| {
+        var copy = try clone(std.testing.allocator, original);
+        defer copy.deinit();
+        try std.testing.expect(eql(original, copy.root));
+    }
 
     try std.testing.expect(isDynamic(&object));
     try std.testing.expect(!eql(&list, &listing));

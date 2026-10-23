@@ -1,0 +1,10 @@
+/// Host details from pkl:platform stay out of the bindings.
+module fixture.platform
+
+import "pkl:platform"
+import "pkl:platform" as host
+
+os: String = platform.current.operatingSystem.name
+hostOs: String = host.current.operatingSystem.name
+arch: String = import("pkl:platform").current.processor.architecture
+label: String = "stable"

@@ -1,0 +1,10 @@
+module invalid.declaration_clash
+
+import "@zig/zig.pkl"
+
+server: Int = 1
+
+@zig.Name { value = "server" }
+class Server {
+  host: String
+}

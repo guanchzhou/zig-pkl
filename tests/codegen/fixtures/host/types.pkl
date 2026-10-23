@@ -1,0 +1,8 @@
+module fixture.hosttypes
+
+import "pkl:platform"
+
+class Host {
+  os: String = platform.current.operatingSystem.name
+  label: String = "stable"
+}
