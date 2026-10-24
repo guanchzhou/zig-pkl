@@ -30,6 +30,9 @@ const Run = struct {
     },
     server: struct {
         cold_ns: u64,
+        cold_start_ns: u64 = 0,
+        cold_evaluate_ns: u64 = 0,
+        cold_close_ns: u64 = 0,
         warm_iterations: u64,
         warm_ns: u64,
     },
@@ -84,16 +87,26 @@ fn codecStat(allocator: std.mem.Allocator, runs: []const Run, comptime name: []c
     };
 }
 
-const Server = struct { cold_ms: f64, warm_us: f64 };
+const Server = struct { cold_ms: f64, start_ms: f64, evaluate_ms: f64, close_ms: f64, warm_us: f64 };
 
 fn serverStat(allocator: std.mem.Allocator, runs: []const Run) !Server {
-    const cold = try allocator.alloc(f64, runs.len);
     const warm = try allocator.alloc(f64, runs.len);
-    for (runs, cold, warm) |run, *c, *w| {
-        c.* = @as(f64, @floatFromInt(run.server.cold_ns)) / 1e6;
+    for (runs, warm) |run, *w| {
         w.* = @as(f64, @floatFromInt(run.server.warm_ns)) / @as(f64, @floatFromInt(run.server.warm_iterations)) / 1e3;
     }
-    return .{ .cold_ms = try median(allocator, cold), .warm_us = try median(allocator, warm) };
+    return .{
+        .cold_ms = try medianMs(allocator, runs, "cold_ns"),
+        .start_ms = try medianMs(allocator, runs, "cold_start_ns"),
+        .evaluate_ms = try medianMs(allocator, runs, "cold_evaluate_ns"),
+        .close_ms = try medianMs(allocator, runs, "cold_close_ns"),
+        .warm_us = try median(allocator, warm),
+    };
+}
+
+fn medianMs(allocator: std.mem.Allocator, runs: []const Run, comptime field: []const u8) !f64 {
+    const values = try allocator.alloc(f64, runs.len);
+    for (runs, values) |run, *v| v.* = @as(f64, @floatFromInt(@field(run.server, field))) / 1e6;
+    return median(allocator, values);
 }
 
 fn sign(ratio: f64) []const u8 {
@@ -152,6 +165,10 @@ pub fn main(init: std.process.Init) !u8 {
     }
     try w.print("| cold evaluator | {d:.2} ms | {d:.2} ms | {d:.2}x | | |\n", .{ base_server.cold_ms, ours_server.cold_ms, 1 / cold_ratio });
     try w.print("| warm evaluate | {d:.2} us | {d:.2} us | {d:.2}x | | |\n\n", .{ base_server.warm_us, ours_server.warm_us, 1 / warm_ratio });
+    try w.writeAll("| Cold phase | pkl-zig | zig-pkl |\n| --- | ---: | ---: |\n");
+    try w.print("| start and create evaluator | {d:.2} ms | {d:.2} ms |\n", .{ base_server.start_ms, ours_server.start_ms });
+    try w.print("| evaluate | {d:.2} ms | {d:.2} ms |\n", .{ base_server.evaluate_ms, ours_server.evaluate_ms });
+    try w.print("| close and shut down | {d:.2} ms | {d:.2} ms |\n\n", .{ base_server.close_ms, ours_server.close_ms });
     try w.writeAll("| Gate | Requirement | Result | Verdict |\n| --- | --- | --- | --- |\n");
     try w.print("| Codec speed | geometric mean at least {d:.2}x | {d:.2}x | {s} |\n", .{ codec_speedup_min, geomean, verdict(speed_pass) });
     try w.print("| Allocations | at least {d:.0}% fewer in every codec case | see table | {s} |\n", .{ allocation_reduction_min * 100, verdict(allocations_pass) });
@@ -175,6 +192,10 @@ pub fn main(init: std.process.Init) !u8 {
     try j.print(
         "\n  }},\n  \"server\": {{\"pkl_zig_cold_ms\": {d:.4}, \"zig_pkl_cold_ms\": {d:.4}, \"pkl_zig_warm_us\": {d:.4}, \"zig_pkl_warm_us\": {d:.4}}},\n",
         .{ base_server.cold_ms, ours_server.cold_ms, base_server.warm_us, ours_server.warm_us },
+    );
+    try j.print(
+        "  \"cold_phases_ms\": {{\"pkl_zig\": {{\"start\": {d:.4}, \"evaluate\": {d:.4}, \"close\": {d:.4}}}, \"zig_pkl\": {{\"start\": {d:.4}, \"evaluate\": {d:.4}, \"close\": {d:.4}}}}},\n",
+        .{ base_server.start_ms, base_server.evaluate_ms, base_server.close_ms, ours_server.start_ms, ours_server.evaluate_ms, ours_server.close_ms },
     );
     try j.print(
         "  \"gates\": {{\"codec_geometric_mean_speedup\": {d:.4}, \"codec_speed\": {}, \"allocations\": {}, \"cold_evaluator\": {}, \"warm_evaluate\": {}, \"all\": {}}},\n  \"rounds\": {{\"pkl_zig\": {d}, \"zig_pkl\": {d}}}\n}}\n",

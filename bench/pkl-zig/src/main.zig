@@ -13,6 +13,8 @@ const codec_warmup = 200;
 const codec_iterations = 2_000;
 const warm_warmup = 20;
 const warm_iterations = 200;
+const cold_warmup = 1;
+const cold_iterations = 10;
 const expression_module = "value = (1 + 2) * 14";
 
 const Server = struct {
@@ -144,12 +146,36 @@ fn evaluateOnce(evaluator: *pkl.Evaluator) !void {
     if (result != 42) return error.BadResult;
 }
 
-fn coldEvaluator(allocator: std.mem.Allocator, io: std.Io, executable: []const u8) !u64 {
-    const start = std.Io.Clock.awake.now(io);
-    var evaluator = try openEvaluator(allocator, io, executable);
-    try evaluateOnce(&evaluator);
-    evaluator.deinit();
-    return @intCast(start.untilNow(io, .awake).nanoseconds);
+fn coldEvaluator(allocator: std.mem.Allocator, io: std.Io, executable: []const u8) !Cold {
+    var total: [cold_iterations]u64 = undefined;
+    var start: [cold_iterations]u64 = undefined;
+    var evaluate: [cold_iterations]u64 = undefined;
+    var close: [cold_iterations]u64 = undefined;
+    for (0..cold_warmup + cold_iterations) |cycle| {
+        const t0 = std.Io.Clock.awake.now(io);
+        var evaluator = try openEvaluator(allocator, io, executable);
+        const t1 = std.Io.Clock.awake.now(io);
+        try evaluateOnce(&evaluator);
+        const t2 = std.Io.Clock.awake.now(io);
+        evaluator.deinit();
+        const t3 = std.Io.Clock.awake.now(io);
+        if (cycle < cold_warmup) continue;
+        const index = cycle - cold_warmup;
+        total[index] = @intCast(t0.durationTo(t3).nanoseconds);
+        start[index] = @intCast(t0.durationTo(t1).nanoseconds);
+        evaluate[index] = @intCast(t1.durationTo(t2).nanoseconds);
+        close[index] = @intCast(t2.durationTo(t3).nanoseconds);
+    }
+    return .{ .total = medianOf(&total), .start = medianOf(&start), .evaluate = medianOf(&evaluate), .close = medianOf(&close) };
+}
+
+/// Median durations of a cold cycle and of its phases, each over
+/// `cold_iterations` cycles.
+const Cold = struct { total: u64, start: u64, evaluate: u64, close: u64 };
+
+fn medianOf(samples: []u64) u64 {
+    std.mem.sortUnstable(u64, samples, {}, std.sort.asc(u64));
+    return samples[samples.len / 2];
 }
 
 fn warmEvaluator(allocator: std.mem.Allocator, io: std.Io, executable: []const u8) !u64 {
@@ -190,7 +216,7 @@ pub fn main(init: std.process.Init) !void {
         try measure(io, "decode_mixed", mixed, decodeDynamic),
         try measure(io, "typed_config", config, runTyped),
     };
-    const cold_ns = try coldEvaluator(allocator, io, executable);
+    const cold = try coldEvaluator(allocator, io, executable);
     const warm_ns = try warmEvaluator(allocator, io, executable);
 
     var buffer: [4096]u8 = undefined;
@@ -206,8 +232,8 @@ pub fn main(init: std.process.Init) !void {
         );
     }
     try out.print(
-        "}},\"server\":{{\"cold_ns\":{d},\"warm_iterations\":{d},\"warm_ns\":{d}}}}}\n",
-        .{ cold_ns, warm_iterations, warm_ns },
+        "}},\"server\":{{\"cold_ns\":{d},\"cold_start_ns\":{d},\"cold_evaluate_ns\":{d},\"cold_close_ns\":{d},\"warm_iterations\":{d},\"warm_ns\":{d}}}}}\n",
+        .{ cold.total, cold.start, cold.evaluate, cold.close, warm_iterations, warm_ns },
     );
     try out.flush();
 }
