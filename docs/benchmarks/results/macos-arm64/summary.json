@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "codec": {
-    "decode_config": {"pkl_zig_mib_s": 206.188, "zig_pkl_mib_s": 677.360, "speedup": 3.2852, "pkl_zig_allocations": 1962.0, "zig_pkl_allocations": 8.0, "pkl_zig_requested_bytes": 201486, "zig_pkl_requested_bytes": 48018},
-    "decode_mixed": {"pkl_zig_mib_s": 239.806, "zig_pkl_mib_s": 681.528, "speedup": 2.8420, "pkl_zig_allocations": 1821.0, "zig_pkl_allocations": 8.0, "pkl_zig_requested_bytes": 310310, "zig_pkl_requested_bytes": 96356},
-    "typed_config": {"pkl_zig_mib_s": 189.361, "zig_pkl_mib_s": 526.695, "speedup": 2.7814, "pkl_zig_allocations": 2284.0, "zig_pkl_allocations": 330.0, "pkl_zig_requested_bytes": 209558, "zig_pkl_requested_bytes": 56090}
+    "decode_config": {"pkl_zig_mib_s": 206.719, "zig_pkl_mib_s": 669.716, "speedup": 3.2397, "pkl_zig_allocations": 1962.0, "zig_pkl_allocations": 8.0, "pkl_zig_requested_bytes": 201486, "zig_pkl_requested_bytes": 48018},
+    "decode_mixed": {"pkl_zig_mib_s": 240.964, "zig_pkl_mib_s": 554.232, "speedup": 2.3001, "pkl_zig_allocations": 1821.0, "zig_pkl_allocations": 8.0, "pkl_zig_requested_bytes": 310310, "zig_pkl_requested_bytes": 96356},
+    "typed_config": {"pkl_zig_mib_s": 190.288, "zig_pkl_mib_s": 531.252, "speedup": 2.7918, "pkl_zig_allocations": 2284.0, "zig_pkl_allocations": 330.0, "pkl_zig_requested_bytes": 209558, "zig_pkl_requested_bytes": 56090}
   },
-  "server": {"pkl_zig_cold_ms": 8.9451, "zig_pkl_cold_ms": 8.7700, "pkl_zig_warm_us": 30.7275, "zig_pkl_warm_us": 25.3215},
-  "gates": {"codec_geometric_mean_speedup": 2.9613, "codec_speed": true, "allocations": true, "cold_evaluator": true, "warm_evaluate": true, "all": true},
-  "rounds": {"pkl_zig": 21, "zig_pkl": 21}
+  "server": {"pkl_zig_cold_ms": 8.4130, "zig_pkl_cold_ms": 7.7648, "pkl_zig_warm_us": 31.4196, "zig_pkl_warm_us": 25.4754},
+  "cold_phases_ms": {"pkl_zig": {"start": 7.3443, "evaluate": 0.3775, "close": 0.7590}, "zig_pkl": {"start": 6.6418, "evaluate": 0.3488, "close": 0.7960}},
+  "gates": {"codec_geometric_mean_speedup": 2.7503, "codec_speed": true, "allocations": true, "cold_evaluator": true, "warm_evaluate": true, "all": true},
+  "rounds": {"pkl_zig": 31, "zig_pkl": 31}
 }

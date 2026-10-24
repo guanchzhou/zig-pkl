@@ -4,6 +4,6 @@
   "pkl": "Pkl 0.32.2 (macOS 26.6.2, native)",
   "os": "Darwin",
   "arch": "arm64",
-  "commit": "0c8530b34526933d31b7b8cd7644cbd0d43afbf9",
-  "rounds": 21
+  "commit": "4cbe41b2e6d0a20801e8e8bd12847056ca2a0c16",
+  "rounds": 31
 }
