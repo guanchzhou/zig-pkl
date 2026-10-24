@@ -45,16 +45,18 @@ std.debug.print("{s}:{d}\n", .{ service.host, service.listen_port });
 
 ## The `@zig` annotations
 
-The annotations live in [`codegen/zig.pkl`](../codegen/zig.pkl), published as the Pkl package `package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig`. A project can also depend on the checkout directly:
+The annotations live in [`codegen/zig.pkl`](../codegen/zig.pkl), published as the Pkl package `package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig`. Its version matches the zig-pkl release. Depend on it from a `PklProject` and run `pkl project resolve`:
 
 ```pkl
 // PklProject
 amends "pkl:Project"
 
 dependencies {
-  ["zig"] = import("path/to/zig-pkl/codegen/PklProject")
+  ["zig"] { uri = "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0.1.0" }
 }
 ```
+
+A project can also depend on a checkout directly with `["zig"] = import("path/to/zig-pkl/codegen/PklProject")`. Modules then import the annotations as `import "@zig/zig.pkl"`.
 
 | Annotation | Applies to | Effect |
 | --- | --- | --- |
@@ -171,6 +173,7 @@ Usage: zig-pkl-gen [options] <module>...
   --check                   Exit with status 1 when any generated file is out of date
   --force                   Overwrite or delete files the generator did not write
   -h, --help                Show this help
+  --version                 Print the zig-pkl version
 ```
 
 Exit status is 0 on success, 1 when generation fails, type-checking fails, a file is not owned by the generator, or `--check` finds stale files, and 2 for usage errors.

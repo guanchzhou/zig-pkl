@@ -7,23 +7,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-- Repository governance, continuous integration, and the frozen pkl-zig benchmark baseline.
-- Code generation: the `zig-pkl-gen` executable, the `zig_pkl.codegen` API, and the `@zig` Pkl annotation package under `codegen/`. Generated bindings cover primitives, optionals, collections, maps, pairs, durations, data sizes, regexes, bytes, integer sequences, classes, inheritance, type aliases, recursive and cross-module types, `local` classes, `pkl:ref` references, and unions as tagged unions or enums. Generation type-checks the bindings before writing, tracks the files it owns in a manifest and never overwrites or deletes other files without `--force`, and evaluates defaults with resource reads denied. Hidden properties, including an override that does not repeat `hidden`, are omitted. A default that references `pkl:platform`, including one reached through an amended module, another module's class, or a local, is omitted so host details are not copied into the bindings. A literal scalar in that module is kept.
-- `zig_pkl.convert.Reference` and `zig_pkl.convert.Access` for `pkl:ref` values. Union decoding prefers members of exactly the value's kind, so `Float | Int` and `Int | Float` decode the same way.
-- CI installs Pkl 0.32.2 from checksum-pinned release assets and fails, rather than skips, when the live tests cannot run.
-- `zig build codegen` and `zig build codegen-test` build steps, and a consumer example in `examples/codegen`.
-- `convert` decodes and encodes enums, tagged unions, single-item pointers, `convert.Map`, `convert.Pair`, and `convert.Dynamic`, and honors `pkl_names`, `pkl_class`, and `pkl_subclasses` declarations.
-- `value.clone` and `value.cloneInto` deep-copy values.
-- Comparative benchmark: `zig build bench` and `bench/compare.sh`, which runs zig-pkl and pkl-zig in the same job and applies the release gates. CI runs it on Linux and publishes the results.
-- `zig build conformance` evaluates every module in `tests/conformance/cases` with Pkl twice: Pkl describes the result itself, zig-pkl decodes its pkl-binary form, and both descriptions must match. A case can require a minimum Pkl version with a `// min-pkl:` first line.
-- CI runs the conformance and integration tests against Pkl 0.25.3, 0.26.3, 0.27.2, 0.28.2, 0.29.1, 0.30.2, 0.31.1, and 0.32.2, runs the fuzzer and a Markdown link check on every push, and fuzzes longer every week.
-- Class and type alias values from Pkl before 0.30, which carry no name or module URI, decode instead of failing with `InvalidValue`, and encode back in the same form.
-- Project loading works with Pkl before 0.32. zig-pkl reads `evaluatorSettings` and resolves relative module paths, cache and root directories, external reader working directories, and reader executables that name a path against the project directory, matching what `resolvedEvaluatorSettings` returns on Pkl 0.32.
-- Runnable examples in `examples/` for typed and dynamic decoding, expressions, module output, projects, in-process readers, an external reader process, restricted evaluation, concurrency, and error handling. `zig build examples` runs them all and `zig build example-<name>` runs one. CI runs them on every platform and Pkl version.
-- `zig build docs` generates the API reference.
-- `Evaluator.evaluateInto` evaluates a module or expression and converts the result into a Zig type in one call.
-- `createEvaluator` fails with `error.NoAllowedModules` when the options allow no modules, which would make Pkl 0.30 and newer exit.
-- Guides in `docs/guides` for installation, evaluation, projects, security, readers, external readers, logging, concurrency, errors, memory ownership, version compatibility, and migration from pkl-zig.
-- A Nuxt website in `site/`, built by `zig build site` and published to GitHub Pages, with the guides, the examples, benchmark charts, the version matrix, the changelog, and the API reference under `/api/`.
-- `uri.fromFile` returns the `file:` URI of an existing file, and `uri.realFilePath` its canonical path.
-- `Manager.init` no longer runs `pkl --version` before starting the server. The version is probed only when evaluator options first use a feature newer than Pkl 0.25.3, and the probe runs while that creation request is in flight; options it does not support close the new evaluator and fail. Shutdown wakes as soon as the server exits, through a pidfd on Linux and a kqueue on macOS, instead of polling. Reader worker threads start when module or resource reader callbacks arrive rather than with the manager. Together these halve the time to start a server, evaluate, and shut down.
+## [0.1.0] - 2026-10-24
+
+First release. It needs Zig 0.17.0 and Pkl 0.25.3 or newer; code generation needs Pkl 0.32.2.
+
+### Evaluation
+
+- `Manager` runs one `pkl server` process and shares it between evaluators on any thread. `Evaluator.evaluateWithOptions` takes a timeout and a `Cancellation`.
+- `Options` covers the evaluator settings of the Message Passing API: module and resource allow lists, environment variables and properties, module paths, root and cache directories, timeouts, output format, HTTP proxy, certificates, rewrites, and headers, external readers, trace mode, and projects. `Options.restricted()` and `Options.preconfigured()` are starting points, and `Builder` adds readers.
+- `createEvaluator` refuses settings the running Pkl release does not support with `error.UnsupportedVersion`, and options without allowed modules with `error.NoAllowedModules`. The server version is probed only when options need a release newer than 0.25.3.
+- `Evaluator.evaluateSource` returns a `value.Tree`; `Evaluator.evaluateInto` converts the result into a Zig type. `convert` maps Pkl values to structs, tagged unions, enums, optionals, slices, pointers, and the `convert.Map`, `convert.Pair`, `convert.Duration`, `convert.DataSize`, `convert.Regex`, `convert.Bytes`, `convert.IntSeq`, `convert.Reference`, and `convert.Dynamic` types, with `pkl_names`, `pkl_class`, and `pkl_subclasses` declarations.
+- Module and resource readers implemented as Zig callbacks, including glob listing, and `ExternalClient` for running a program as an external reader that Pkl starts.
+- Per-evaluator loggers for `trace()` output and warnings.
+- `project.load` reads `PklProject` settings and dependencies. Relative paths resolve against the project directory on every supported release, matching what `resolvedEvaluatorSettings` returns on Pkl 0.32.
+- pkl-binary decoding and encoding with `value.decodeSlice`, `value.decodeReader`, `value.encode`, and `value.clone`, including values from Pkl releases before 0.30 that carry no class name.
+- `uri.fromFile` returns the `file:` URI of an existing file.
+
+### Code generation
+
+- `zig-pkl-gen` and the `zig_pkl.codegen` API write Zig types for Pkl modules: primitives, optionals, collections, maps, pairs, durations, data sizes, regexes, bytes, integer sequences, classes and inheritance, type aliases, recursive and cross-module types, `local` classes, `pkl:ref` references, and unions as tagged unions or enums, including unions of unrelated types.
+- Generation type-checks the bindings before writing them, records the files it owns in a manifest, and does not overwrite or delete other files without `--force`. `--check` reports stale bindings.
+- Defaults are evaluated with resource reads denied. Hidden properties are omitted, and so are defaults that depend on `pkl:platform`.
+- The `@zig` annotations are published as the Pkl package `package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0.1.0`.
+
+### Verification
+
+- CI runs the unit, integration, conformance, and code generation tests and every example on Linux x86_64 and aarch64, macOS aarch64, and Windows x86_64, and the conformance and integration tests and the examples against Pkl 0.25.3, 0.26.3, 0.27.2, 0.28.2, 0.29.1, 0.30.2, 0.31.1, and 0.32.2.
+- `zig build conformance` compares each decoded value with Pkl's own description of it. `zig build fuzz` runs on every push, and longer every week.
+- `bench/compare.sh` runs zig-pkl and pkl-zig in the same job. On an Apple M5 with Pkl 0.32.2, zig-pkl decodes pkl-binary 2.75 times faster (geometric mean of three cases) with 86% to 99.6% fewer allocations, is 7.7% faster to start a server, evaluate, and shut down, and 18.9% faster per evaluation on a running evaluator.
+
+### Documentation
+
+- Guides for installation, evaluation, projects, security, readers, external readers, logging, concurrency, errors, memory ownership, version compatibility, and migration from pkl-zig.
+- Ten runnable examples in `examples/`, run by `zig build examples`, and a code generation consumer in `examples/codegen`.
+- The website at <https://guanchzhou.github.io/zig-pkl/>, built by `zig build site`, with the API reference under `/api/`.
+
+[Unreleased]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/guanchzhou/zig-pkl/releases/tag/v0.1.0

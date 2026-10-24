@@ -3,7 +3,7 @@ amends "pkl:Project"
 package {
   name = "zig"
   baseUri = "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/\(name)"
-  version = "0.0.0"
+  version = "0.1.0"
   packageZipUrl = "https://github.com/guanchzhou/zig-pkl/releases/download/\(name)@\(version)/\(name)@\(version).zip"
   description = "Annotations for generating Zig bindings from Pkl modules with zig-pkl."
   authors {

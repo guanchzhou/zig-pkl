@@ -5,7 +5,7 @@
 
 Zig 0.17 bindings for [Pkl](https://pkl-lang.org/).
 
-This package is unreleased (`0.0.0`). The module name is `zig_pkl`. The public API is not stable.
+The current release is [0.1.0](https://github.com/guanchzhou/zig-pkl/releases/tag/v0.1.0). The module name is `zig_pkl`. The public API may change before 1.0.
 
 ## Requirements
 
