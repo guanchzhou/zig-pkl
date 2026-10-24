@@ -1,0 +1,32 @@
+open class Base {
+  id: Int = 1
+  hidden secret: String = "not rendered"
+  label: String?
+}
+
+class Derived extends Base {
+  tags: Listing<String> = new { "a"; "b" }
+  child: Base? = null
+}
+
+local internal = "not rendered"
+
+base = new Base { label = "base" }
+derived = new Derived {
+  id = 2
+  child = new Base { id = 3 }
+}
+amended = (derived) { label = "amended" }
+
+dynamic = new Dynamic {
+  name = "dynamic"
+  count = 2
+  [10] = "ten"
+  [false] = "no"
+  "first element"
+  new Dynamic { nested = true }
+}
+emptyDynamic = new Dynamic {}
+elementsOnly = new Dynamic { 1; 2; 3 }
+
+increment = (x: Int) -> x + 1

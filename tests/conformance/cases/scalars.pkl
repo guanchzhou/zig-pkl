@@ -1,0 +1,26 @@
+zero = 0
+negative = -42
+maxInt = 9223372036854775807
+minInt = -9223372036854775808
+hex = 0xff
+float = 1.5
+wholeFloat = 2.0
+negativeZero = -0.0
+smallest = 4.9e-324
+largest = 1.7976931348623157e308
+nan = NaN
+infinity = Infinity
+negativeInfinity = -Infinity
+yes = true
+no = false
+absent = null
+empty = ""
+ascii = "zig-pkl"
+unicode = "héllo ✓ 🚀 日本語"
+escapes = "tab\tnewline\nquote\"backslash\\"
+multiline = """
+  first line
+    indented
+  last line
+  """
+raw = #"no \n escape"#

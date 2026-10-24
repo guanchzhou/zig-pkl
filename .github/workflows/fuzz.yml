@@ -1,0 +1,47 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Mutated inputs per run
+        default: "20000000"
+      seed:
+        description: Seed; empty uses the run id
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ZIG_VERSION: "0.17.0"
+
+jobs:
+  fuzz:
+    name: decoders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+
+      - name: Fuzz
+        env:
+          ITERATIONS: ${{ inputs.iterations || '20000000' }}
+          SEED: ${{ inputs.seed || github.run_id }}
+        # The fuzzer prints its seed; rerun with the same seed to reproduce.
+        run: zig build fuzz -Doptimize=ReleaseSafe -Dfuzz-iterations="$ITERATIONS" -Dfuzz-seed="$SEED"

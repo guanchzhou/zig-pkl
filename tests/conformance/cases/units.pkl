@@ -1,0 +1,23 @@
+nanoseconds = 7.ns
+microseconds = 7.us
+milliseconds = 7.ms
+seconds = 7.s
+minutes = 7.min
+hours = 7.h
+days = 7.d
+fractional = 1.5.h
+negative = -3.s
+converted = 90.min.toUnit("h")
+
+bytes = 3.b
+kilobytes = 3.kb
+kibibytes = 3.kib
+megabytes = 3.mb
+mebibytes = 3.mib
+gigabytes = 3.gb
+gibibytes = 3.gib
+terabytes = 3.tb
+tebibytes = 3.tib
+petabytes = 3.pb
+pebibytes = 3.pib
+fractionalSize = 2.5.gb

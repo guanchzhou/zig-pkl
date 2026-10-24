@@ -11,7 +11,10 @@ Contributions are reviewed against this document and the [code of conduct](CODE_
 zig fmt --check .
 zig build
 zig build test
+zig build check-links
 ```
+
+Changes to decoding need `zig build conformance` with Pkl installed. Add a module to `tests/conformance/cases` for each new kind of value; when it needs a newer Pkl than 0.25.3, start the file with `// min-pkl: X.Y.Z`. Point `PKL_EXEC` at an older Pkl to check compatibility.
 
 Format Zig sources with `zig fmt` before review.
 

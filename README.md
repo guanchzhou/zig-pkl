@@ -10,7 +10,8 @@ This package is unreleased (`0.0.0`). The module name is `zig_pkl`. The public A
 ## Requirements
 
 - Zig 0.17.0
-- Pkl 0.32.2, the supported language version
+- Pkl 0.25.3 or newer for evaluation. CI runs the conformance and integration tests against the latest patch release of every minor version from 0.25 to 0.32.
+- Pkl 0.32.2 for code generation
 
 ## Build
 
@@ -18,7 +19,9 @@ This package is unreleased (`0.0.0`). The module name is `zig_pkl`. The public A
 zig build
 zig build test
 zig build integration-test   # uses PKL_EXEC or pkl on PATH; skips when absent unless ZIG_PKL_REQUIRE_PKL=1
+zig build conformance        # decoded values must match Pkl's own description; needs Pkl
 zig build fuzz               # bounded; tune with -Dfuzz-iterations and -Dfuzz-seed
+zig build check-links        # relative links in Markdown files
 zig build codegen            # regenerate checked-in bindings; needs Pkl
 zig build codegen-test       # generator tests; live parts skip without Pkl unless ZIG_PKL_REQUIRE_PKL=1
 zig build bench -Doptimize=ReleaseFast -Dpkl=/path/to/pkl

@@ -1,0 +1,22 @@
+emptyList = List()
+list = List(1, "two", 3.0, null, List(4))
+emptySet = Set()
+set = Set("b", "a", "b", 1)
+emptyMap = Map()
+map = Map("a", 1, 2, "two", true, List(3))
+nestedMap = Map("outer", Map("inner", 1))
+emptyListing = new Listing {}
+listing = new Listing { 1; "two"; new Listing { 3 } }
+emptyMapping = new Mapping {}
+mapping = new Mapping {
+  ["a"] = 1
+  [2] = "two"
+  [3.5] = false
+}
+amendedMapping = (mapping) { ["a"] = 10; ["z"] = 26 }
+pair = Pair(1, Pair("nested", List()))
+ascending = IntSeq(1, 10)
+stepped = IntSeq(0, 100).step(7)
+descending = IntSeq(10, -10).step(-3)
+regex = Regex(#"^[a-z]+(\d{2,})?$"#)
+emptyRegex = Regex("")

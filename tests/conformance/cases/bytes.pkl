@@ -1,0 +1,5 @@
+// min-pkl: 0.29.0
+empty = Bytes()
+small = Bytes(0, 1, 127, 128, 255)
+fromBase64 = "emlnLXBrbA==".base64DecodedBytes
+inList = List(Bytes(1), Bytes(2, 3))

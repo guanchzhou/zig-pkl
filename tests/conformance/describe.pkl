@@ -1,0 +1,49 @@
+/// Pkl's own view of a value, rendered as tagged JSON for comparison with
+/// what zig-pkl decodes from the same module's pkl-binary output.
+///
+/// Scalars other than strings, booleans, and null carry a tag naming their
+/// kind, so `1` and `1.0` stay distinct. Object members are pairs of key and
+/// value; properties use their name as the key. Hidden and local properties
+/// are absent, as in pkl-binary.
+///
+/// Runs on every Pkl release the suite supports, so types added after Pkl
+/// 0.25 are matched by class name rather than by type.
+module describe
+
+import "pkl:reflect"
+
+function d(v): Any =
+  if (v == null) null
+  else if (v is Boolean) v
+  else if (v is String) v
+  else if (v is Int) new Dynamic { int = v }
+  else if (v is Float) new Dynamic { float = number(v) }
+  else if (v is Duration) new Dynamic { duration = List(v.value, v.unit) }
+  else if (v is DataSize) new Dynamic { dataSize = List(v.value, v.unit) }
+  else if (v is Pair) new Dynamic { pair = List(d(v.first), d(v.second)) }
+  else if (v is List) new Dynamic { list = v.map((e) -> d(e)) }
+  else if (v is Set) new Dynamic { set = v.toList().map((e) -> d(e)) }
+  else if (v is Map) new Dynamic { map = v.entries.map((e) -> List(d(e.first), d(e.second))) }
+  else if (v is Listing) new Dynamic { listing = v.toList().map((e) -> d(e)) }
+  else if (v is Mapping) new Dynamic { mapping = v.toMap().entries.map((e) -> List(d(e.first), d(e.second))) }
+  else if (v is IntSeq) new Dynamic { intSeq = List(v.start, v.end, v.step) }
+  else if (v is Regex) new Dynamic { regex = v.pattern }
+  else if (v is Class) new Dynamic { `class` = v.simpleName }
+  else if (v is TypeAlias) new Dynamic { typeAlias = reflect.TypeAlias(v).name }
+  else if (v is Function) new Dynamic { `function` = true }
+  else if (v.getClass().simpleName == "Bytes") new Dynamic { bytes = v.base64 }
+  else let (o = if (v is Dynamic) v else v.toDynamic())
+    new Dynamic {
+      object = new Dynamic {
+        `class` = v.getClass().simpleName
+        members = o.toMap().entries.map((e) -> List(d(e.first), d(e.second)))
+        elements = o.toList().map((e) -> d(e))
+      }
+    }
+
+local function number(v: Float): Float|String =
+  if (v.isNaN) "NaN"
+  else if (v.isInfinite) (if (v > 0) "Infinity" else "-Infinity")
+  else v
+
+function render(v): String = new JsonRenderer {}.renderValue(d(v))

@@ -1,0 +1,9 @@
+// min-pkl: 0.30.0
+class Server { port: Port }
+
+typealias Port = UInt16
+
+classValue = String
+userClass = Server
+aliasValue = Port
+classes = List(Int, Server, Listing)

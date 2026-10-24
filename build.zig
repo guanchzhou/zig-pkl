@@ -64,6 +64,33 @@ pub fn build(b: *std.Build) void {
     const integration_step = b.step("integration-test", "Run tests that use the pkl executable when it is installed");
     integration_step.dependOn(&run_integration_tests.step);
 
+    const conformance_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/conformance.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zig_pkl", .module = mod },
+            },
+        }),
+    });
+    const run_conformance_tests = b.addRunArtifact(conformance_tests);
+    run_conformance_tests.has_side_effects = true;
+    const conformance_step = b.step("conformance", "Check decoded values against Pkl's own view of tests/conformance/cases");
+    conformance_step.dependOn(&run_conformance_tests.step);
+
+    const link_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/links.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_link_tests = b.addRunArtifact(link_tests);
+    run_link_tests.has_side_effects = true;
+    const links_step = b.step("check-links", "Check that relative links in Markdown files point at existing paths");
+    links_step.dependOn(&run_link_tests.step);
+
     const fuzz_config = b.addOptions();
     fuzz_config.addOption(u64, "iterations", b.option(u64, "fuzz-iterations", "Mutated inputs per fuzz run (default 20000)") orelse 20_000);
     fuzz_config.addOption(u64, "seed", b.option(u64, "fuzz-seed", "Seed for reproducible fuzz runs") orelse 0x5eed_9c1a);
