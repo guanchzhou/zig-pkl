@@ -50,7 +50,21 @@ Same-run comparison with pkl-zig: [docs/benchmarks/comparison.md](docs/benchmark
 
 ## Documentation
 
-When `site/` is present, the Docs workflow publishes it to <https://guanchzhou.github.io/zig-pkl/>.
+Guides:
+
+- [Installation](docs/guides/installation.md) and [quick start](docs/guides/quickstart.md)
+- [Evaluation](docs/guides/evaluation.md): typed and dynamic values, expressions, module output
+- [Projects](docs/guides/projects.md)
+- [Security](docs/guides/security.md): allow lists, environment, HTTP
+- [Readers](docs/guides/readers.md) and [external readers](docs/guides/external-readers.md)
+- [Logging](docs/guides/logging.md)
+- [Concurrency](docs/guides/concurrency.md): timeouts and cancellation
+- [Errors](docs/guides/errors.md)
+- [Memory ownership](docs/guides/ownership.md)
+- [Version compatibility](docs/guides/compatibility.md)
+- [Migrating from pkl-zig](docs/guides/migration.md)
+
+`zig build docs` writes the API reference to `zig-out/docs`. When `site/` is present, the Docs workflow publishes it to <https://guanchzhou.github.io/zig-pkl/>.
 
 ## Project
 
