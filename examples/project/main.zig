@@ -47,12 +47,10 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(main_uri);
     var failure: ?[]u8 = null;
     defer if (failure) |text| allocator.free(text);
-    var tree = evaluator.evaluateSource(.uri(main_uri), null, &failure) catch |err| {
+    const settings = evaluator.evaluateInto(Settings, allocator, .uri(main_uri), null, &failure) catch |err| {
         if (failure) |text| std.debug.print("{s}\n", .{text});
         return err;
     };
-    defer tree.deinit();
-    const settings = try zig_pkl.convert.into(Settings, allocator, tree.root);
     defer zig_pkl.convert.freeInto(Settings, allocator, settings);
     try out.print("environment {s}, buffer {d}{s}, timeout {d}{s}\n", .{
         settings.environment,

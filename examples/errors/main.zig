@@ -10,7 +10,8 @@ const PrintLogger = struct {
         return .{ .ptr = self, .vtable = &.{ .log = log } };
     }
 
-    /// Runs on a reader thread; the event text is only valid during the call.
+    /// Runs on the manager's response thread, so keep it short. The event
+    /// text is only valid during the call.
     fn log(_: *anyopaque, event: zig_pkl.logger.Event) void {
         const level = if (event.level == 0) "trace" else "warn";
         std.debug.print("[{s}] {s} ({s})\n", .{ level, event.message, event.frame_uri });

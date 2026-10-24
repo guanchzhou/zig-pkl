@@ -229,6 +229,25 @@ test "load resolved evaluator settings from PklProject" {
     try expectPklResolution(evaluator, project);
 }
 
+test "evaluateInto copies a result into a Zig type" {
+    const allocator = std.testing.allocator;
+    const manager = openManager(allocator, std.testing.io) catch |err| return skipWithoutPkl(err);
+    defer manager.deinit();
+    var rejected: ?[]u8 = null;
+    defer if (rejected) |text| allocator.free(text);
+    const evaluator = try manager.createEvaluator(zig_pkl.Options.restricted(), &rejected);
+    defer evaluator.close();
+
+    const Server = struct { host: []const u8, ports: []const u16 };
+    var failure: ?[]u8 = null;
+    defer if (failure) |text| allocator.free(text);
+    const server = try evaluator.evaluateInto(Server, allocator, .text("server { host = \"edge\"; ports = List(80, 443) }"), "server", &failure);
+    defer zig_pkl.convert.freeInto(Server, allocator, server);
+    try std.testing.expectEqualStrings("edge", server.host);
+    try std.testing.expectEqualSlices(u16, &.{ 80, 443 }, server.ports);
+    try std.testing.expectError(error.EvaluationFailed, evaluator.evaluateInto(Server, allocator, .text("server = throw(\"no\")"), "server", &failure));
+}
+
 test "relative project paths resolve beside PklProject on every Pkl release" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;

@@ -11,6 +11,7 @@ const backend = @import("../backend.zig");
 const message = @import("../protocol/message.zig");
 const msgpack = @import("../protocol/msgpack.zig");
 const value = @import("../value/value.zig");
+const convert = @import("../value/convert.zig");
 const logger = @import("logger.zig");
 const options = @import("options.zig");
 const reader = @import("reader.zig");
@@ -143,6 +144,22 @@ pub const Evaluator = struct {
             expression,
             failure,
         );
+    }
+
+    /// Evaluates `evaluation_source`, or `expression` within it, and copies
+    /// the result into a `T` owned by `allocator` as `convert.into` does.
+    /// Release it with `convert.freeInto`.
+    pub fn evaluateInto(
+        self: *Evaluator,
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        evaluation_source: Source,
+        expression: ?[]const u8,
+        failure: *?[]u8,
+    ) !T {
+        var tree = try self.evaluateSource(evaluation_source, expression, failure);
+        defer tree.deinit();
+        return convert.into(T, allocator, tree.root);
     }
 
     /// Stops new reader and logger callbacks, waits for queued and running callbacks of
@@ -316,6 +333,9 @@ pub const Manager = struct {
     }
 
     /// On `error.Rejected`, `rejected` owns a message allocated with the manager allocator.
+    /// Options without any `allowed_modules` pattern fail with
+    /// `error.NoAllowedModules` before reaching the server: no module, not
+    /// even inline text, could load, and Pkl 0.30 and newer exit on them.
     pub fn createEvaluator(self: *Manager, evaluator_options: Options, rejected: *?[]u8) !*Evaluator {
         return self.createEvaluatorWithOptions(evaluator_options, rejected, .{});
     }
@@ -336,6 +356,8 @@ pub const Manager = struct {
         rejected: *?[]u8,
         request_options: RequestOptions,
     ) !*Evaluator {
+        const modules = evaluator_options.allowed_modules orelse return error.NoAllowedModules;
+        if (modules.len == 0) return error.NoAllowedModules;
         const validated = try self.validateIfKnown(evaluator_options);
         const request_id = self.allocateId();
         const request = try options.toRequest(self.allocator, evaluator_options, request_id);
@@ -1035,6 +1057,22 @@ fn driveInner(script: *Script) !void {
     } });
 }
 
+/// The smallest options a server accepts.
+const test_options = Options{ .allowed_modules = &.{"repl:"} };
+
+test "options without allowed modules fail before reaching the server" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var script = Script{ .allocator = allocator, .io = io };
+    defer script.deinit();
+    const manager = try Manager.initWithBackend(allocator, io, script.transport(), logger.Logger.noop);
+    defer manager.deinit();
+    var rejected: ?[]u8 = null;
+    try std.testing.expectError(error.NoAllowedModules, manager.createEvaluator(.{}, &rejected));
+    try std.testing.expectError(error.NoAllowedModules, manager.createEvaluator(.{ .allowed_modules = &.{} }, &rejected));
+    try std.testing.expectEqual(@as(usize, 0), script.outgoing.items.len);
+}
+
 test "manager multiplexes evaluators, readers, and logs" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -1189,7 +1227,7 @@ test "unknown frames are skipped and malformed frames fail the connection" {
     }));
     try std.testing.expectEqual(@as(?anyerror, error.InvalidMessage), manager.failure());
     var rejected: ?[]u8 = null;
-    try std.testing.expectError(error.InvalidMessage, manager.createEvaluator(.{}, &rejected));
+    try std.testing.expectError(error.InvalidMessage, manager.createEvaluator(test_options, &rejected));
 }
 
 test "server exit fails later requests immediately with the terminal error" {
@@ -1210,7 +1248,7 @@ test "server exit fails later requests immediately with the terminal error" {
     try std.testing.expectEqual(@as(?anyerror, error.Closed), manager.failure());
     var rejected: ?[]u8 = null;
     const started = std.Io.Clock.awake.now(io);
-    try std.testing.expectError(error.Closed, manager.createEvaluatorWithOptions(.{}, &rejected, .{
+    try std.testing.expectError(error.Closed, manager.createEvaluatorWithOptions(test_options, &rejected, .{
         .timeout = .{ .duration = durationMilliseconds(5000) },
     }));
     try std.testing.expect(started.untilNow(io, .awake).toMilliseconds() < 1000);
@@ -1245,7 +1283,7 @@ test "a create response that arrives after its timeout closes the server evaluat
     defer manager.deinit();
     const driver = try std.Thread.spawn(.{}, driveLateCreate, .{&script});
     var rejected: ?[]u8 = null;
-    try std.testing.expectError(error.Timeout, manager.createEvaluatorWithOptions(.{}, &rejected, .{
+    try std.testing.expectError(error.Timeout, manager.createEvaluatorWithOptions(test_options, &rejected, .{
         .timeout = .{ .duration = durationMilliseconds(10) },
     }));
     driver.join();
@@ -1282,7 +1320,7 @@ test "options that a slowly probed version does not support close the new evalua
     manager.probe = try Probe.create(allocator, &.{ "/bin/sh", "-c", "sleep 0.2; echo 'Pkl 0.29.1'", "sh", "server" });
     const driver = try std.Thread.spawn(.{}, driveUnsupportedCreate, .{&script});
     var rejected: ?[]u8 = null;
-    const traced = Options{ .trace_mode = .pretty };
+    const traced = Options{ .allowed_modules = test_options.allowed_modules, .trace_mode = .pretty };
     const outcome = manager.createEvaluator(traced, &rejected);
     driver.join();
     try std.testing.expect(script.failed == null);
@@ -1491,7 +1529,7 @@ test "evaluator close waits for its in-flight reader callbacks" {
         }
     }.run, .{&script});
     var rejected: ?[]u8 = null;
-    const evaluator = try manager.createEvaluator(.{ .module_readers = &readers }, &rejected);
+    const evaluator = try manager.createEvaluator(.{ .allowed_modules = test_options.allowed_modules, .module_readers = &readers }, &rejected);
     created.join();
 
     defer blocking.released.store(true, .release);
@@ -1557,7 +1595,7 @@ test "evaluator close waits for its in-flight logger callbacks" {
         }
     }.run, .{&script});
     var rejected: ?[]u8 = null;
-    const evaluator = try manager.createEvaluator(.{ .logger = sleeping.asLogger() }, &rejected);
+    const evaluator = try manager.createEvaluator(.{ .allowed_modules = test_options.allowed_modules, .logger = sleeping.asLogger() }, &rejected);
     created.join();
 
     defer sleeping.released.store(true, .release);
@@ -1605,7 +1643,7 @@ test "reader callbacks run on a bounded pool and overflow is refused" {
         }
     }.run, .{&script});
     var rejected: ?[]u8 = null;
-    const evaluator = try manager.createEvaluator(.{ .module_readers = &readers }, &rejected);
+    const evaluator = try manager.createEvaluator(.{ .allowed_modules = test_options.allowed_modules, .module_readers = &readers }, &rejected);
     created.join();
     defer evaluator.close();
     defer blocking.released.store(true, .release);

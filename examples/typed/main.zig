@@ -39,13 +39,10 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(module_uri);
     var failure: ?[]u8 = null;
     defer if (failure) |text| allocator.free(text);
-    var tree = evaluator.evaluateSource(.uri(module_uri), null, &failure) catch |err| {
+    const app = evaluator.evaluateInto(App, allocator, .uri(module_uri), null, &failure) catch |err| {
         if (failure) |text| std.debug.print("{s}\n", .{text});
         return err;
     };
-    defer tree.deinit();
-
-    const app = try convert.into(App, allocator, tree.root);
     defer convert.freeInto(App, allocator, app);
 
     var buffer: [1024]u8 = undefined;
