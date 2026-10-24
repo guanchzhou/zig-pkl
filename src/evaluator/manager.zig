@@ -63,7 +63,8 @@ pub const InitOptions = struct {
     version: VersionCheck = .probe,
     /// Used by `initWithOptions` only.
     subprocess: subprocess.Options = .{},
-    /// Threads that run module and resource reader callbacks.
+    /// Most threads that run module and resource reader callbacks. They
+    /// start when callbacks arrive and no started thread is idle.
     reader_workers: u16 = 4,
     /// Callback requests that may wait for a worker before the server is
     /// told the reader is busy.
@@ -190,6 +191,8 @@ pub const Manager = struct {
     probe: ?*Probe,
     probe_mutex: std.Io.Mutex,
     workers: []std.Thread,
+    workers_started: usize,
+    idle_workers: usize,
     jobs: []Job,
     job_head: usize,
     job_len: usize,
@@ -264,17 +267,14 @@ pub const Manager = struct {
             .probe = null,
             .probe_mutex = .init,
             .workers = workers,
+            .workers_started = 0,
+            .idle_workers = 0,
             .jobs = jobs,
             .job_head = 0,
             .job_len = 0,
             .work_cond = .init,
             .workers_stop = false,
         };
-        var started: usize = 0;
-        errdefer self.stopWorkers(started);
-        while (started < workers.len) : (started += 1) {
-            workers[started] = try std.Thread.spawn(.{}, workerMain, .{self});
-        }
         self.thread = try std.Thread.spawn(.{}, readerMain, .{self});
         return self;
     }
@@ -287,7 +287,7 @@ pub const Manager = struct {
         self.mutex.lockUncancelable(self.io);
         while (self.pending.count() != 0) self.cond.waitUncancelable(self.io, &self.mutex);
         self.mutex.unlock(self.io);
-        self.stopWorkers(self.workers.len);
+        self.stopWorkers();
         self.evaluators.deinit(self.allocator);
         for (self.owned_evaluators.items) |evaluator| self.allocator.destroy(evaluator);
         self.owned_evaluators.deinit(self.allocator);
@@ -546,12 +546,22 @@ pub const Manager = struct {
         self.cond.broadcast(self.io);
     }
 
-    fn stopWorkers(self: *Manager, started: usize) void {
+    fn stopWorkers(self: *Manager) void {
         self.mutex.lockUncancelable(self.io);
         self.workers_stop = true;
         self.work_cond.broadcast(self.io);
+        const started = self.workers_started;
         self.mutex.unlock(self.io);
         for (self.workers[0..started]) |worker| worker.join();
+    }
+
+    /// Starts another worker when every started one is busy. Called with
+    /// `mutex` held after a job is queued; false when no worker can run it.
+    fn growWorkers(self: *Manager) bool {
+        if (self.idle_workers >= self.job_len or self.workers_started == self.workers.len) return true;
+        self.workers[self.workers_started] = std.Thread.spawn(.{}, workerMain, .{self}) catch return self.workers_started != 0;
+        self.workers_started += 1;
+        return true;
     }
 };
 
@@ -675,7 +685,7 @@ fn enqueue(self: *Manager, incoming: message.Owned) void {
     const evaluator_id = incoming.message.evaluatorId().?;
     self.mutex.lockUncancelable(self.io);
     const evaluator = self.evaluators.get(evaluator_id);
-    const refusal: ?[]const u8 = if (evaluator == null)
+    var refusal: ?[]const u8 = if (evaluator == null)
         "unknown evaluator"
     else if (self.workers_stop)
         "manager is closing"
@@ -684,10 +694,15 @@ fn enqueue(self: *Manager, incoming: message.Owned) void {
     else
         null;
     if (refusal == null) {
-        evaluator.?.callbacks += 1;
         self.jobs[(self.job_head + self.job_len) % self.jobs.len] = .{ .incoming = incoming, .evaluator = evaluator.? };
         self.job_len += 1;
-        self.work_cond.signal(self.io);
+        if (self.growWorkers()) {
+            evaluator.?.callbacks += 1;
+            self.work_cond.signal(self.io);
+        } else {
+            self.job_len -= 1;
+            refusal = "no reader thread could be started";
+        }
     }
     self.mutex.unlock(self.io);
     if (refusal) |text| {
@@ -701,7 +716,11 @@ fn workerMain(self: *Manager) void {
     self.mutex.lockUncancelable(self.io);
     defer self.mutex.unlock(self.io);
     while (true) {
-        while (self.job_len == 0 and !self.workers_stop) self.work_cond.waitUncancelable(self.io, &self.mutex);
+        while (self.job_len == 0 and !self.workers_stop) {
+            self.idle_workers += 1;
+            self.work_cond.waitUncancelable(self.io, &self.mutex);
+            self.idle_workers -= 1;
+        }
         if (self.job_len == 0) return;
         const job = self.jobs[self.job_head];
         self.job_head = (self.job_head + 1) % self.jobs.len;
@@ -1590,6 +1609,7 @@ test "reader callbacks run on a bounded pool and overflow is refused" {
     created.join();
     defer evaluator.close();
     defer blocking.released.store(true, .release);
+    try std.testing.expectEqual(@as(usize, 0), manager.workers_started);
 
     try script.push(.{ .read_module_request = .{ .request_id = -1, .evaluator_id = 4, .uri = "slow:/1.pkl" } });
     try awaitChange(io, u32, &blocking.entered, 0);
@@ -1600,4 +1620,7 @@ test "reader callbacks run on a bounded pool and overflow is refused" {
     try std.testing.expectEqual(@as(i64, -3), refused.message.read_module_response.request_id);
     try std.testing.expectEqualStrings("reader queue is full", refused.message.read_module_response.error_message.?);
     try std.testing.expectEqual(@as(u32, 1), blocking.entered.load(.acquire));
+    manager.mutex.lockUncancelable(io);
+    defer manager.mutex.unlock(io);
+    try std.testing.expectEqual(@as(usize, 1), manager.workers_started);
 }
