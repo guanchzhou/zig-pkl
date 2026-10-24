@@ -170,6 +170,7 @@ jobs:
           else
             printf 'Dry run for %s\n' "$VERSION" > dist/release-notes.md
           fi
+          # shellcheck disable=SC2016 # backticks are Markdown, not command substitution
           {
             printf 'The `@zig` annotations for [zig-pkl %s](https://github.com/guanchzhou/zig-pkl/releases/tag/v%s) code generation.\n\n' "$VERSION" "$VERSION"
             printf '```pkl\n// PklProject\namends "pkl:Project"\n\ndependencies {\n  ["zig"] { uri = "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@%s" }\n}\n```\n' "$VERSION"
