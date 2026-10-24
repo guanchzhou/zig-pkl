@@ -1,6 +1,8 @@
 # zig-pkl
 
 [![CI](https://github.com/guanchzhou/zig-pkl/actions/workflows/ci.yml/badge.svg)](https://github.com/guanchzhou/zig-pkl/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/guanchzhou/zig-pkl)](https://github.com/guanchzhou/zig-pkl/releases/latest)
+[![Docs](https://github.com/guanchzhou/zig-pkl/actions/workflows/docs.yml/badge.svg)](https://guanchzhou.github.io/zig-pkl/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Zig 0.17 bindings for [Pkl](https://pkl-lang.org/).
