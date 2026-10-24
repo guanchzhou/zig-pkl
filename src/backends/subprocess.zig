@@ -255,6 +255,7 @@ pub const Subprocess = struct {
             },
             .wasi => return false,
             else => {
+                if (self.waitForExitEvent(timeout_ms)) |exited| return exited;
                 // The server usually exits within a few milliseconds of
                 // stdin closing: poll every 100 us for the first 20 ms, then
                 // back off.
@@ -268,6 +269,72 @@ pub const Subprocess = struct {
                     if (start.untilNow(self.io, .awake).nanoseconds >= 20 * std.time.ns_per_ms) pause_us = @min(pause_us * 2, 5_000);
                 }
             },
+        }
+    }
+
+    /// Waits for the exit notification of a pidfd on Linux or a kqueue on
+    /// macOS, which wakes as soon as the server exits. Returns null when
+    /// neither is available, for example on Linux before 5.3 or under a
+    /// seccomp filter.
+    fn waitForExitEvent(self: *Subprocess, timeout_ms: u32) ?bool {
+        const pid = self.child.id.?;
+        const deadline = std.Io.Clock.awake.now(self.io).addDuration(.fromMilliseconds(timeout_ms));
+        switch (builtin.os.tag) {
+            .linux => {
+                const linux = std.os.linux;
+                const rc = linux.pidfd_open(pid, 0);
+                if (linux.errno(rc) != .SUCCESS) return null;
+                const fd: linux.fd_t = @intCast(rc);
+                defer _ = linux.close(fd);
+                var fds = [_]linux.pollfd{.{ .fd = fd, .events = linux.POLL.IN, .revents = 0 }};
+                while (true) {
+                    if (self.reapWithoutBlocking()) return true;
+                    const left = remainingMilliseconds(self.io, deadline);
+                    if (left == 0) return false;
+                    const ready = linux.poll(&fds, fds.len, @intCast(@min(left, std.math.maxInt(i32))));
+                    switch (linux.errno(ready)) {
+                        .SUCCESS, .INTR => {},
+                        else => return null,
+                    }
+                }
+            },
+            .macos => {
+                const c = std.c;
+                const queue = c.kqueue();
+                if (queue < 0) return null;
+                defer _ = c.close(queue);
+                const change = [_]c.Kevent{.{
+                    .ident = @intCast(pid),
+                    .filter = c.EVFILT.PROC,
+                    .flags = c.EV.ADD | c.EV.ONESHOT,
+                    .fflags = c.NOTE.EXIT,
+                    .data = 0,
+                    .udata = 0,
+                }};
+                var events: [1]c.Kevent = undefined;
+                var changes: []const c.Kevent = &change;
+                while (true) {
+                    if (self.reapWithoutBlocking()) return true;
+                    const left = remainingMilliseconds(self.io, deadline);
+                    if (left == 0) return false;
+                    const timeout: c.timespec = .{
+                        .sec = @intCast(left / 1000),
+                        .nsec = @intCast(@as(u64, left % 1000) * std.time.ns_per_ms),
+                    };
+                    const ready = c.kevent(queue, changes.ptr, @intCast(changes.len), &events, events.len, &timeout);
+                    if (ready < 0) switch (c.errno(ready)) {
+                        .INTR => continue,
+                        .SRCH => return self.reapWithoutBlocking(),
+                        else => return null,
+                    };
+                    changes = &.{};
+                    if (ready > 0 and events[0].flags & c.EV.ERROR != 0) {
+                        if (events[0].data == @backingInt(std.posix.E.SRCH)) return self.reapWithoutBlocking();
+                        return null;
+                    }
+                }
+            },
+            else => return null,
         }
     }
 
