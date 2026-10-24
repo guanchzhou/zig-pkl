@@ -6,6 +6,7 @@
 //! dependencies keep their own declared dependencies, resolved through the
 //! root lock file, at every nesting level.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const message = @import("../protocol/message.zig");
 const value = @import("../value/value.zig");
@@ -56,7 +57,9 @@ pub const Owned = struct {
     }
 };
 
-const project_expression = "List(resolvedEvaluatorSettings, dependencies)";
+// `resolvedEvaluatorSettings` exists only from Pkl 0.32; `fromEvaluated`
+// resolves the same paths for every release.
+const project_expression = "List(evaluatorSettings, dependencies)";
 
 /// Evaluates the project module at `project_uri` and merges its declared
 /// dependencies with `lock_json`. A missing lock is valid only when the
@@ -118,8 +121,11 @@ fn absolutePath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u
     return allocator.dupe(u8, buffer[0..length]);
 }
 
-/// Builds owned options from evaluated `resolvedEvaluatorSettings` and
-/// `dependencies` values plus optional lock file contents.
+/// Builds owned options from evaluated `evaluatorSettings` and `dependencies`
+/// values plus optional lock file contents. Relative module paths, cache and
+/// root directories, external reader working directories, and reader
+/// executables that contain a path separator resolve against the directory
+/// of `project_uri`, as `resolvedEvaluatorSettings` does from Pkl 0.32.
 pub fn fromEvaluated(
     allocator: std.mem.Allocator,
     project_uri: []const u8,
@@ -160,7 +166,141 @@ pub fn fromEvaluated(
             result.trace_mode = message.TraceMode.parse(text) orelse return error.InvalidProject;
         }
     }
+    try resolvePaths(owned, project_uri, &result, host_paths);
     return .{ .arena = arena, .options = result, .project = project };
+}
+
+/// The server runs on this host, so Pkl resolves project paths with its rules.
+const host_paths: PathRules = if (builtin.os.tag == .windows) .windows else .posix;
+
+const PathRules = enum { posix, windows };
+
+fn resolvePaths(allocator: std.mem.Allocator, project_uri: []const u8, result: *options.Options, rules: PathRules) Error!void {
+    const base = try projectDirectory(allocator, project_uri, rules);
+    if (result.module_paths) |paths| {
+        const resolved = try allocator.alloc([]const u8, paths.len);
+        for (paths, resolved) |path, *destination| destination.* = try resolvePath(allocator, base, path, rules);
+        result.module_paths = resolved;
+    }
+    if (result.root_dir) |path| result.root_dir = try resolvePath(allocator, base, path, rules);
+    if (result.cache_dir) |path| result.cache_dir = try resolvePath(allocator, base, path, rules);
+    inline for (.{ "external_module_readers", "external_resource_readers" }) |field| {
+        if (@field(result, field)) |readers| {
+            const resolved = try allocator.alloc(message.ExternalReader, readers.len);
+            for (readers, resolved) |reader, *destination| {
+                destination.* = reader;
+                if (hasSeparator(reader.executable, rules)) destination.executable = try resolvePath(allocator, base, reader.executable, rules);
+                destination.working_dir = try resolvePath(allocator, base, reader.working_dir orelse "./", rules);
+            }
+            @field(result, field) = resolved;
+        }
+    }
+}
+
+/// The decoded path of the directory holding the `file:` URI `project_uri`,
+/// ending in a separator.
+fn projectDirectory(allocator: std.mem.Allocator, project_uri: []const u8, rules: PathRules) Error![]const u8 {
+    const scheme = "file:";
+    if (project_uri.len < scheme.len or !std.ascii.eqlIgnoreCase(project_uri[0..scheme.len], scheme)) return error.InvalidProject;
+    var rest = project_uri[scheme.len..];
+    var host: []const u8 = "";
+    if (std.mem.startsWith(u8, rest, "//")) {
+        const end = std.mem.indexOfScalarPos(u8, rest, 2, '/') orelse return error.InvalidProject;
+        host = rest[2..end];
+        rest = rest[end..];
+    }
+    if (std.mem.indexOfAny(u8, rest, "?#")) |end| rest = rest[0..end];
+    const directory = rest[0 .. (std.mem.lastIndexOfScalar(u8, rest, '/') orelse return error.InvalidProject) + 1];
+    const path = std.Uri.percentDecodeInPlace(try allocator.dupe(u8, directory));
+    switch (rules) {
+        .posix => return path,
+        .windows => {
+            const local = if (path.len >= 4 and path[0] == '/' and std.ascii.isUpper(path[1]) and path[2] == ':' and path[3] == '/') path[1..] else path;
+            const converted = if (host.len != 0) try std.mem.concat(allocator, u8, &.{ "//", host, local }) else local;
+            std.mem.replaceScalar(u8, converted, '/', '\\');
+            return converted;
+        },
+    }
+}
+
+fn resolvePath(allocator: std.mem.Allocator, base: []const u8, path: []const u8, rules: PathRules) Error![]const u8 {
+    if (isAbsolute(path, rules)) return normalize(allocator, path, rules);
+    return normalize(allocator, try join(allocator, base, path, rules), rules);
+}
+
+fn hasSeparator(path: []const u8, rules: PathRules) bool {
+    return switch (rules) {
+        .posix => std.mem.indexOfScalar(u8, path, '/') != null,
+        .windows => std.mem.indexOfAny(u8, path, "/\\") != null,
+    };
+}
+
+fn isAbsolute(path: []const u8, rules: PathRules) bool {
+    return switch (rules) {
+        .posix => std.mem.startsWith(u8, path, "/"),
+        .windows => isDriveLetter(path) or (path.len >= 2 and isWindowsSeparator(path[0]) and isWindowsSeparator(path[1])),
+    };
+}
+
+fn isWindowsSeparator(c: u8) bool {
+    return c == '/' or c == '\\';
+}
+
+fn isDriveLetter(path: []const u8) bool {
+    return path.len >= 2 and std.ascii.isAlphabetic(path[0]) and path[1] == ':';
+}
+
+fn join(allocator: std.mem.Allocator, base: []const u8, path: []const u8, rules: PathRules) Error![]const u8 {
+    switch (rules) {
+        .posix => {
+            if (std.mem.endsWith(u8, base, "/")) return std.mem.concat(allocator, u8, &.{ base, path });
+            return std.mem.concat(allocator, u8, &.{ base, "/", path });
+        },
+        .windows => {
+            const local = try allocator.dupe(u8, path);
+            std.mem.replaceScalar(u8, local, '/', '\\');
+            if (std.mem.startsWith(u8, local, "\\")) return std.mem.concat(allocator, u8, &.{ windowsRoot(base), local });
+            if (std.mem.endsWith(u8, base, "\\")) return std.mem.concat(allocator, u8, &.{ base, local });
+            return std.mem.concat(allocator, u8, &.{ base, "\\", local });
+        },
+    }
+}
+
+/// Collapses `.`, `..`, and repeated separators below the path's root and
+/// drops any trailing separator.
+fn normalize(allocator: std.mem.Allocator, raw: []const u8, rules: PathRules) Error![]const u8 {
+    const separator: u8 = if (rules == .windows) '\\' else '/';
+    const path = try allocator.dupe(u8, raw);
+    if (rules == .windows) std.mem.replaceScalar(u8, path, '/', '\\');
+    const root = if (rules == .windows) windowsRoot(path) else "/";
+    var kept: std.ArrayList([]const u8) = .empty;
+    var parts = std.mem.splitScalar(u8, path[@min(root.len, path.len)..], separator);
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, part, "..")) {
+            _ = kept.pop();
+        } else if (part.len != 0 and !std.mem.eql(u8, part, ".")) {
+            try kept.append(allocator, part);
+        }
+    }
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(allocator, root);
+    for (kept.items, 0..) |part, index| {
+        if (index != 0) try out.append(allocator, separator);
+        try out.appendSlice(allocator, part);
+    }
+    return out.items;
+}
+
+/// `\\server\share\`, `C:\`, `C:`, `\`, or empty, for a path that uses `\`.
+fn windowsRoot(path: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, path, "\\\\")) {
+        const first = std.mem.indexOfScalarPos(u8, path, 2, '\\') orelse return path;
+        const second = std.mem.indexOfScalarPos(u8, path, first + 1, '\\') orelse return path;
+        return path[0 .. second + 1];
+    }
+    if (isDriveLetter(path)) return if (path.len > 2 and path[2] == '\\') path[0..3] else path[0..2];
+    if (std.mem.startsWith(u8, path, "\\")) return "\\";
+    return "";
 }
 
 const LockEntry = union(enum) {
@@ -592,4 +732,62 @@ test "canonical lock keys keep only the major version" {
     defer allocator.free(key);
     try std.testing.expectEqualStrings("package://example.com/a/b@12", key);
     try std.testing.expectError(error.InvalidProject, canonicalKey(allocator, "package://example.com/a"));
+}
+
+test "project paths resolve against the project directory like Pkl's posix resolver" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const base = try projectDirectory(allocator, "file:///work/my%20app/PklProject", .posix);
+    try std.testing.expectEqualStrings("/work/my app/", base);
+    const cases = [_][2][]const u8{
+        .{ ".", "/work/my app" },
+        .{ "./", "/work/my app" },
+        .{ "lib/", "/work/my app/lib" },
+        .{ "../shared/./x//y", "/work/shared/x/y" },
+        .{ "../../../..", "/" },
+        .{ "/opt/pkl/../cache", "/opt/cache" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case[1], try resolvePath(allocator, base, case[0], .posix));
+}
+
+test "project paths resolve against the project directory like Pkl's windows resolver" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const base = try projectDirectory(allocator, "file:///C:/work/app/PklProject", .windows);
+    try std.testing.expectEqualStrings("C:\\work\\app\\", base);
+    const cases = [_][2][]const u8{
+        .{ "lib/x", "C:\\work\\app\\lib\\x" },
+        .{ "..\\shared", "C:\\work\\shared" },
+        .{ "\\top", "C:\\top" },
+        .{ "D:/other/./dir", "D:\\other\\dir" },
+        .{ "//server/share/a/../b", "\\\\server\\share\\b" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case[1], try resolvePath(allocator, base, case[0], .windows));
+    const unc = try projectDirectory(allocator, "file://server/share/app/PklProject", .windows);
+    try std.testing.expectEqualStrings("\\\\server\\share\\app\\", unc);
+}
+
+test "reader executables resolve only when they name a path" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var result = options.Options{
+        .module_paths = &.{ "lib", "/abs" },
+        .root_dir = ".",
+        .external_module_readers = &.{
+            .{ .scheme = "a", .executable = "pkl-reader" },
+            .{ .scheme = "b", .executable = "./bin/reader", .working_dir = "tmp" },
+        },
+    };
+    try resolvePaths(allocator, "file:///p/PklProject", &result, .posix);
+    try std.testing.expectEqualStrings("/p/lib", result.module_paths.?[0]);
+    try std.testing.expectEqualStrings("/abs", result.module_paths.?[1]);
+    try std.testing.expectEqualStrings("/p", result.root_dir.?);
+    const readers = result.external_module_readers.?;
+    try std.testing.expectEqualStrings("pkl-reader", readers[0].executable);
+    try std.testing.expectEqualStrings("/p", readers[0].working_dir.?);
+    try std.testing.expectEqualStrings("/p/bin/reader", readers[1].executable);
+    try std.testing.expectEqualStrings("/p/tmp", readers[1].working_dir.?);
 }

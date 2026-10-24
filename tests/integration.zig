@@ -4,6 +4,7 @@ const zig_pkl = @import("zig_pkl");
 const project_path = "tests/fixtures/project/PklProject";
 const project_suffix = "/tests/fixtures/project";
 const reader_suffix = "/tests/fixtures/project/reader";
+const paths_project_path = "tests/fixtures/paths/PklProject";
 const dependency_app_path = "tests/fixtures/dependencies/app/PklProject";
 const dependency_main_path = "tests/fixtures/dependencies/app/main.pkl";
 
@@ -54,6 +55,55 @@ fn fileUri(allocator: std.mem.Allocator, io: std.Io, relative: []const u8) ![]u8
     var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const length = try file.realPath(io, &buffer);
     return zig_pkl.uri.fromPath(allocator, buffer[0..length], .native);
+}
+
+fn serverAtLeast(allocator: std.mem.Allocator, io: std.Io, minimum: []const u8) !bool {
+    const executable = try pklExecutable(allocator);
+    defer executable.deinit(allocator);
+    const server = try zig_pkl.getVersion(allocator, io, executable.path);
+    return server.atLeast(try zig_pkl.version.Version.parse(minimum));
+}
+
+/// From Pkl 0.32 the project module resolves its own settings; zig-pkl's
+/// resolution of every release's plain settings must match it exactly.
+fn expectPklResolution(evaluator: *zig_pkl.Evaluator, project: zig_pkl.project.Owned) !void {
+    const allocator = std.testing.allocator;
+    var failure: ?[]u8 = null;
+    defer if (failure) |text| allocator.free(text);
+    var resolved = try evaluator.evaluateSource(zig_pkl.Source.uri(project.projectUri()), "resolvedEvaluatorSettings", &failure);
+    defer resolved.deinit();
+    const settings = resolved.root;
+    try expectOptionalString(zig_pkl.value.findProperty(settings, "rootDir"), project.options.root_dir);
+    try expectOptionalString(zig_pkl.value.findProperty(settings, "moduleCacheDir"), project.options.cache_dir);
+    const module_paths = zig_pkl.value.findProperty(settings, "modulePath").?;
+    if (module_paths.* == .nil) {
+        try std.testing.expectEqual(@as(?[]const []const u8, null), project.options.module_paths);
+    } else {
+        const items = switch (module_paths.*) {
+            .list => |items| items,
+            .listing => |items| items,
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expectEqual(items.len, project.options.module_paths.?.len);
+        for (items, project.options.module_paths.?) |item, path| try std.testing.expectEqualStrings(item.string, path);
+    }
+    const readers = zig_pkl.value.findProperty(settings, "externalModuleReaders") orelse return;
+    if (readers.* == .nil) return;
+    const entries = switch (readers.*) {
+        .map => |entries| entries,
+        .mapping => |entries| entries,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(entries.len, project.options.external_module_readers.?.len);
+    for (entries, project.options.external_module_readers.?) |entry, reader| {
+        try expectOptionalString(zig_pkl.value.findProperty(entry.value, "executable"), reader.executable);
+        try expectOptionalString(zig_pkl.value.findProperty(entry.value, "workingDir"), reader.working_dir);
+    }
+}
+
+fn expectOptionalString(actual: ?*const zig_pkl.Value, expected: ?[]const u8) !void {
+    if (actual == null or actual.?.* == .nil) return std.testing.expectEqual(@as(?[]const u8, null), expected);
+    try std.testing.expectEqualStrings(actual.?.string, expected.?);
 }
 
 fn hasPathSuffix(path: []const u8, posix_suffix: []const u8) bool {
@@ -159,6 +209,8 @@ test "load resolved evaluator settings from PklProject" {
     const io = std.testing.io;
     const manager = openManager(allocator, io) catch |err| return skipWithoutPkl(err);
     defer manager.deinit();
+    // The fixture sets traceMode and an external reader workingDir.
+    if (!try serverAtLeast(allocator, io, "0.32.0")) return error.SkipZigTest;
     var rejected: ?[]u8 = null;
     defer if (rejected) |text| allocator.free(text);
     const evaluator = try manager.createEvaluator(zig_pkl.Options.preconfigured(), &rejected);
@@ -174,6 +226,28 @@ test "load resolved evaluator settings from PklProject" {
     try std.testing.expect(hasPathSuffix(project.options.external_module_readers.?[0].executable, reader_suffix));
     try std.testing.expectEqualStrings("http://localhost:8080", project.options.http.?.proxy.?.address.?);
     try std.testing.expectEqualStrings("X-Fixture", project.options.http.?.headers.?[0].headers[0].name);
+    try expectPklResolution(evaluator, project);
+}
+
+test "relative project paths resolve beside PklProject on every Pkl release" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const manager = openManager(allocator, io) catch |err| return skipWithoutPkl(err);
+    defer manager.deinit();
+    var rejected: ?[]u8 = null;
+    defer if (rejected) |text| allocator.free(text);
+    const evaluator = try manager.createEvaluator(zig_pkl.Options.preconfigured(), &rejected);
+    defer evaluator.close();
+
+    var project = try zig_pkl.project.loadFile(allocator, io, evaluator, paths_project_path);
+    defer project.deinit();
+    const module_paths = project.options.module_paths.?;
+    try std.testing.expectEqual(@as(usize, 2), module_paths.len);
+    try std.testing.expect(hasPathSuffix(module_paths[0], "/tests/fixtures/paths/lib"));
+    try std.testing.expect(hasPathSuffix(module_paths[1], "/tests/fixtures/shared/x"));
+    try std.testing.expect(hasPathSuffix(project.options.cache_dir.?, "/tests/fixtures/paths/cache"));
+    try std.testing.expect(hasPathSuffix(project.options.root_dir.?, "/tests/fixtures"));
+    if (try serverAtLeast(allocator, io, "0.32.0")) try expectPklResolution(evaluator, project);
 }
 
 test "a project loaded through a symlink evaluates beside its canonical uri" {

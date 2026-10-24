@@ -1,0 +1,10 @@
+amends "pkl:Project"
+
+evaluatorSettings {
+  modulePath {
+    "lib"
+    "../shared/./x"
+  }
+  moduleCacheDir = "cache/"
+  rootDir = ".."
+}
