@@ -32,6 +32,13 @@ pub fn build(b: *std.Build) void {
     });
     b.step("docs", "Generate the API reference into zig-out/docs").dependOn(&install_docs.step);
 
+    const site_cmd = b.addSystemCommand(&.{"env"});
+    site_cmd.addPrefixedDirectoryArg("ZIG_PKL_API_DOCS=", docs_lib.getEmittedDocs());
+    site_cmd.addArgs(&.{ "bun", "run", "generate" });
+    site_cmd.setCwd(b.path("site"));
+    site_cmd.has_side_effects = true;
+    b.step("site", "Generate the website into site/.output/public; needs env, Bun, and `bun install` in site/").dependOn(&site_cmd.step);
+
     const run_step = b.step("run", "Print library information");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);

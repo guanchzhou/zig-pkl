@@ -24,6 +24,7 @@ zig build fuzz               # bounded; tune with -Dfuzz-iterations and -Dfuzz-s
 zig build check-links        # relative links in Markdown files
 zig build examples           # build and run every program in examples/; needs Pkl
 zig build docs               # API reference in zig-out/docs
+zig build site               # website in site/.output/public; needs Bun
 zig build codegen            # regenerate checked-in bindings; needs Pkl
 zig build codegen-test       # generator tests; live parts skip without Pkl unless ZIG_PKL_REQUIRE_PKL=1
 zig build bench -Doptimize=ReleaseFast -Dpkl=/path/to/pkl
@@ -64,7 +65,7 @@ Guides:
 - [Version compatibility](docs/guides/compatibility.md)
 - [Migrating from pkl-zig](docs/guides/migration.md)
 
-`zig build docs` writes the API reference to `zig-out/docs`. When `site/` is present, the Docs workflow publishes it to <https://guanchzhou.github.io/zig-pkl/>.
+`zig build docs` writes the API reference to `zig-out/docs`. `zig build site` generates the website from these guides, the examples, the benchmark results, and the API reference into `site/.output/public`; run `bun install` in `site/` first. The Docs workflow publishes it to <https://guanchzhou.github.io/zig-pkl/>.
 
 ## Project
 

@@ -1,0 +1,496 @@
+/* Warm neutral base with one accent, the orange of the Zig logo, kept for
+   the primary action and zig-pkl's bars in the charts. System fonts: a
+   documentation site gains nothing from a font download. */
+:root {
+  --bg: #fbfaf7;
+  --surface: #f2efe8;
+  --ink: #1f1d19;
+  --muted: #625d53;
+  --line: #e2ddd2;
+  --link: #8a4b00;
+  --accent: #f7a41d;
+  --accent-ink: #1f1d19;
+  --bar: #c9c2b4;
+  --radius: 6px;
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161512;
+    --surface: #211f1b;
+    --ink: #ebe7de;
+    --muted: #a39d91;
+    --line: #34312b;
+    --link: #f5b54a;
+    --bar: #5a554c;
+  }
+
+  .shiki,
+  .shiki span {
+    color: var(--shiki-dark) !important;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.6 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 2px;
+}
+
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+
+:not(pre) > code {
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+
+pre {
+  background: var(--surface) !important;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  line-height: 1.5;
+  margin: 1rem 0;
+  overflow-x: auto;
+  padding: 0.875rem 1rem;
+}
+
+.skip {
+  left: -999px;
+  position: absolute;
+}
+
+.skip:focus {
+  background: var(--bg);
+  left: 1rem;
+  padding: 0.5rem;
+  top: 1rem;
+  z-index: 10;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+main {
+  flex: 1;
+  margin: 0 auto;
+  max-width: 72rem;
+  padding: 0 1.5rem;
+  width: 100%;
+}
+
+.topbar {
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: 72rem;
+  padding: 1rem 1.5rem;
+  width: 100%;
+}
+
+.brand {
+  color: var(--ink);
+  font-size: 1.125rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.topbar nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+}
+
+.topbar nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.topbar nav a:hover,
+.topbar nav a.router-link-active {
+  color: var(--ink);
+}
+
+.footer {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin-top: 4rem;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+/* Home */
+
+.intro {
+  padding: 3.5rem 0 3rem;
+}
+
+.intro-text {
+  max-width: 40rem;
+}
+
+.intro-code {
+  margin-top: 2.5rem;
+}
+
+.intro h1 {
+  font-size: 2.75rem;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0 0 1rem;
+}
+
+.lede {
+  color: var(--muted);
+  font-size: 1.125rem;
+  margin: 0 0 1.5rem;
+}
+
+.install {
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+}
+
+.actions .primary {
+  background: var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent-ink);
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+}
+
+.caption {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin: 0 0 -0.5rem;
+}
+
+.intro-code pre {
+  font-size: 0.8rem;
+}
+
+.features {
+  border-top: 1px solid var(--line);
+  padding: 2.5rem 0;
+}
+
+.features h2,
+.numbers h2,
+.versions h2 {
+  font-size: 1.375rem;
+  margin: 0 0 1.25rem;
+}
+
+.features dl {
+  display: grid;
+  gap: 1.5rem 2.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  margin: 0;
+}
+
+.features dt {
+  font-weight: 600;
+}
+
+.features dd {
+  color: var(--muted);
+  margin: 0.25rem 0 0;
+}
+
+.numbers {
+  background: var(--surface);
+  border-radius: var(--radius);
+  margin: 1rem 0 2.5rem;
+  padding: 2rem;
+}
+
+.numbers ul {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0;
+}
+
+.numbers strong {
+  display: block;
+  font-size: 1.75rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.numbers span {
+  color: var(--muted);
+  font-size: 0.925rem;
+}
+
+.versions {
+  max-width: 44rem;
+  padding-bottom: 1rem;
+}
+
+.version-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+}
+
+.version-list li {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  padding: 0.15rem 0.5rem;
+}
+
+/* Documentation pages */
+
+.doc-layout {
+  display: grid;
+  gap: 3rem;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  padding-top: 2rem;
+}
+
+.doc-nav {
+  align-self: start;
+  font-size: 0.925rem;
+  position: sticky;
+  top: 1rem;
+}
+
+.doc-nav-heading {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.doc-nav-heading:first-child {
+  margin-top: 0;
+}
+
+.doc-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.doc-nav li {
+  margin: 0.2rem 0;
+}
+
+.doc-nav a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.doc-nav a:hover {
+  text-decoration: underline;
+}
+
+.doc-nav a.router-link-exact-active {
+  color: var(--link);
+  font-weight: 600;
+}
+
+.prose {
+  max-width: 46rem;
+}
+
+.prose h1 {
+  font-size: 2.125rem;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 0 0 1.25rem;
+}
+
+.prose h2 {
+  border-top: 1px solid var(--line);
+  font-size: 1.375rem;
+  margin: 2.5rem 0 0.75rem;
+  padding-top: 1.5rem;
+}
+
+.prose h3 {
+  font-size: 1.125rem;
+  margin: 2rem 0 0.5rem;
+}
+
+.prose h2 a,
+.prose h3 a,
+.prose h4 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.prose table {
+  border-collapse: collapse;
+  display: block;
+  font-size: 0.925rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose th {
+  font-weight: 600;
+}
+
+.prose li + li {
+  margin-top: 0.25rem;
+}
+
+.example-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 1.5rem 0;
+}
+
+.example details {
+  margin: 0.75rem 0;
+}
+
+.example summary {
+  cursor: pointer;
+}
+
+/* Charts */
+
+.charts {
+  display: grid;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.chart {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin: 0;
+  padding: 1.25rem;
+}
+
+.chart figcaption {
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.chart-group + .chart-group {
+  margin-top: 1rem;
+}
+
+.chart-label {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin: 0 0 0.35rem;
+}
+
+.chart-row {
+  align-items: center;
+  display: grid;
+  font-size: 0.875rem;
+  gap: 0.75rem;
+  grid-template-columns: 4.5rem minmax(0, 1fr) 7.5rem;
+  margin: 0.2rem 0;
+}
+
+.chart-track {
+  display: block;
+}
+
+.chart-bar {
+  background: var(--bar);
+  border-radius: 3px;
+  display: block;
+  height: 0.9rem;
+}
+
+.chart-bar.highlight {
+  background: var(--accent);
+}
+
+.chart-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (max-width: 52rem) {
+  .doc-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .intro {
+    padding-top: 2rem;
+  }
+
+  .doc-nav {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 1rem;
+    position: static;
+  }
+
+  .doc-nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+  }
+
+  .numbers {
+    padding: 1.25rem;
+  }
+}
