@@ -1,5 +1,11 @@
 name: Release
 
+# A vX.Y.Z tag publishes two releases from the same commit: vX.Y.Z with the
+# Zig package, and zig@X.Y.Z with the Pkl package of the @zig annotations,
+# whose package URI resolves through pkg.pkl-lang.org to that release. Both
+# tags must be pushed. The releases are created as drafts, verified, and only
+# then published.
+
 on:
   push:
     tags:
@@ -15,19 +21,27 @@ concurrency:
 
 env:
   ZIG_VERSION: "0.17.0"
+  PKL_VERSION: "0.32.2"
+  PKL_SHA256: 874c75484c79add77fb2346ea4ab2e8875eea35fb707894bf5457a2df5d03def
 
 jobs:
   verify:
     name: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # find the CI runs of the released commit
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Check version
+      - name: Check versions
+        id: version
         env:
           RELEASE_REF_NAME: ${{ github.ref_name }}
           RELEASE_REF_TYPE: ${{ github.ref_type }}
@@ -39,6 +53,17 @@ jobs:
             exit 1
           fi
           printf 'package version %s\n' "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          pkl_version="$(sed -n 's/^[[:space:]]*version = "\([^"]*\)".*/\1/p' codegen/PklProject | head -n 1)"
+          if [[ "$pkl_version" != "$version" ]]; then
+            echo "codegen/PklProject version ${pkl_version} does not match ${version}" >&2
+            exit 1
+          fi
+          escaped="${version//./\\.}"
+          if ! grep -Eq "^## \\[${escaped}\\]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for ${version}" >&2
+            exit 1
+          fi
           if [[ "$RELEASE_REF_TYPE" != "tag" ]]; then
             exit 0
           fi
@@ -47,14 +72,36 @@ jobs:
             echo "tag ${RELEASE_REF_NAME} must be vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
-          tag_version="${RELEASE_REF_NAME#v}"
-          if [[ "$tag_version" != "$version" ]]; then
+          if [[ "${RELEASE_REF_NAME#v}" != "$version" ]]; then
             echo "tag ${RELEASE_REF_NAME} does not match package version ${version}" >&2
             exit 1
           fi
-          escaped="${version//./\\.}"
-          if ! grep -Eq "^## \\[${escaped}\\]" CHANGELOG.md; then
-            echo "CHANGELOG.md has no section for ${version}" >&2
+
+      - name: Check Pkl package tag
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          target="$(git ls-remote --tags "$REPOSITORY_URL" | awk -v ref="refs/tags/zig@${VERSION}" '
+            $2 == ref "^{}" { peeled = $1 }
+            $2 == ref { direct = $1 }
+            END { print (peeled != "" ? peeled : direct) }
+          ')"
+          if [[ "$target" != "$GITHUB_SHA" ]]; then
+            echo "tag zig@${VERSION} must exist and point at ${GITHUB_SHA}, found '${target}'" >&2
+            exit 1
+          fi
+
+      - name: Check CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          passed="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=success" --jq .total_count)"
+          if [[ "$passed" -eq 0 ]]; then
+            echo "CI has not passed on ${GITHUB_SHA}" >&2
             exit 1
           fi
 
@@ -88,28 +135,45 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Create source archive
+      - name: Install Pkl
         env:
-          RELEASE_REF_NAME: ${{ github.ref_name }}
-          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n 1)"
-          mkdir -p dist
-          prefix="zig-pkl-${version}/"
-          git archive --format=tar --prefix="$prefix" HEAD \
-            | gzip --no-name > "dist/zig-pkl-${version}.tar.gz"
+          mkdir -p "$(dirname "$PKL_EXEC")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$PKL_EXEC" "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          echo "${PKL_SHA256}  ${PKL_EXEC}" | sha256sum --check --strict
+          chmod +x "$PKL_EXEC"
+
+      - name: Create archives
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
+        run: |
+          set -euo pipefail
+          mkdir -p dist pkl-package
+          git archive --format=tar --prefix="zig-pkl-${VERSION}/" HEAD \
+            | gzip --no-name > "dist/zig-pkl-${VERSION}.tar.gz"
+          "$PKL_EXEC" project package codegen --output-path pkl-package
+          ls pkl-package
           if [[ "$RELEASE_REF_TYPE" == "tag" ]]; then
             # shellcheck disable=SC2016 # $0 is an awk field, not a shell expansion
-            awk -v ver="$version" '
+            awk -v ver="$VERSION" '
               BEGIN { heading = "## [" ver "]" }
               found && index($0, "## ") == 1 { exit }
-              index($0, heading) == 1 { found = 1 }
+              index($0, heading) == 1 { found = 1; next }
+              found && /^\[[^]]+\]: / { next }
               found { print }
             ' CHANGELOG.md > dist/release-notes.md
           else
-            printf 'Dry run for %s\n' "$version" > dist/release-notes.md
+            printf 'Dry run for %s\n' "$VERSION" > dist/release-notes.md
           fi
+          {
+            printf 'The `@zig` annotations for [zig-pkl %s](https://github.com/guanchzhou/zig-pkl/releases/tag/v%s) code generation.\n\n' "$VERSION" "$VERSION"
+            printf '```pkl\n// PklProject\namends "pkl:Project"\n\ndependencies {\n  ["zig"] { uri = "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@%s" }\n}\n```\n' "$VERSION"
+          } > pkl-package/release-notes.md
 
       - name: SPDX SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
@@ -134,6 +198,7 @@ jobs:
           set -euo pipefail
           cd dist
           sha256sum -- *.tar.gz zig-pkl.spdx.json zig-pkl.cdx.json > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -142,6 +207,7 @@ jobs:
             dist/*.tar.gz
             dist/*.json
             dist/SHA256SUMS
+            pkl-package/zig@*
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -159,37 +225,197 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload Pkl package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pkl-package
+          path: pkl-package
+          if-no-files-found: error
+          retention-days: 14
+
+  consumer:
+    name: consumer
+    needs: [verify, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+
+      - name: Download Pkl package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pkl-package
+          path: pkl-package
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Verify checksums and signature
+        env:
+          CERTIFICATE_IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          (cd pkl-package && for file in *.sha256; do
+            [[ "$(sha256sum < "${file%.sha256}" | cut -d ' ' -f 1)" == "$(cat "$file")" ]] || { echo "$file does not match" >&2; exit 1; }
+          done)
+          cosign verify-blob dist/SHA256SUMS --bundle dist/SHA256SUMS.bundle \
+            --certificate-identity "$CERTIFICATE_IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+
+      - name: Install Pkl
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PKL_EXEC")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$PKL_EXEC" "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          echo "${PKL_SHA256}  ${PKL_EXEC}" | sha256sum --check --strict
+          chmod +x "$PKL_EXEC"
+
+      - name: Build a consumer from the archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
+        run: tests/consumer/run.sh "dist/zig-pkl-${VERSION}.tar.gz" "$VERSION" | tee archive-hash
+
+      - name: Compare with the git tag
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          tag_hash="$(zig fetch "git+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}#${GITHUB_REF_NAME}")"
+          if [[ "$tag_hash" != "$(cat archive-hash)" ]]; then
+            echo "archive hash $(cat archive-hash) differs from tag hash ${tag_hash}" >&2
+            exit 1
+          fi
+
+      - name: Regenerate bindings from the archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
+        run: |
+          set -euo pipefail
+          mkdir extracted
+          tar -xzf "dist/zig-pkl-${VERSION}.tar.gz" -C extracted
+          cd "extracted/zig-pkl-${VERSION}"
+          zig build codegen -- --check
+
+      - name: Compare the Pkl package with the sources
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir unpacked
+          unzip -q "pkl-package/zig@${VERSION}.zip" -d unpacked
+          diff -r --exclude=tests --exclude=PklProject --exclude=PklProject.deps.json unpacked codegen
+          jq -e --arg v "$VERSION" '.version == $v and .packageZipUrl == "https://github.com/guanchzhou/zig-pkl/releases/download/zig@\($v)/zig@\($v).zip"' "pkl-package/zig@${VERSION}"
+
   publish:
     name: publish
-    needs: package
+    needs: [verify, consumer]
     if: success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write # create the GitHub Release and upload assets
+      contents: write # create and publish the GitHub Releases
     steps:
       - name: Download release assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release
-          path: downloaded
+          path: dist
 
-      - name: Publish GitHub Release
+      - name: Download Pkl package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pkl-package
+          path: pkl-package
+
+      - name: Create draft releases
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p assets
-          find downloaded -type f -exec cp -p {} assets/ \;
-          test -s assets/release-notes.md
-          test -s assets/SHA256SUMS
-          test -s assets/SHA256SUMS.bundle
-          gh release create "$RELEASE_TAG" \
-            --title "$RELEASE_TAG" \
-            --notes-file assets/release-notes.md \
-            assets/zig-pkl-*.tar.gz \
-            assets/zig-pkl.spdx.json \
-            assets/zig-pkl.cdx.json \
-            assets/SHA256SUMS \
-            assets/SHA256SUMS.bundle
+          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "v${VERSION}" --notes-file dist/release-notes.md \
+            "dist/zig-pkl-${VERSION}.tar.gz" dist/zig-pkl.spdx.json dist/zig-pkl.cdx.json \
+            dist/SHA256SUMS dist/SHA256SUMS.bundle
+          gh release create "zig@${VERSION}" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --latest=false \
+            --title "zig@${VERSION}" --notes-file pkl-package/release-notes.md \
+            "pkl-package/zig@${VERSION}" "pkl-package/zig@${VERSION}.sha256" \
+            "pkl-package/zig@${VERSION}.zip" "pkl-package/zig@${VERSION}.zip.sha256"
+
+      - name: Publish releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release edit "zig@${VERSION}" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+  published:
+    name: published
+    needs: [verify, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+
+      - name: Install Pkl
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PKL_EXEC")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$PKL_EXEC" "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          echo "${PKL_SHA256}  ${PKL_EXEC}" | sha256sum --check --strict
+          chmod +x "$PKL_EXEC"
+
+      - name: Fetch the published archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
+        run: tests/consumer/run.sh "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/zig-pkl-${VERSION}.tar.gz" "$VERSION"
+
+      - name: Resolve the published Pkl package
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PKL_EXEC: ${{ runner.temp }}/pkl/pkl
+        run: |
+          set -euo pipefail
+          printf 'import "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@%s#/zig.pkl"\n\nname = zig.Package.simpleName\n' "$VERSION" > check.pkl
+          "$PKL_EXEC" eval check.pkl

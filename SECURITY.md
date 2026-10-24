@@ -2,7 +2,11 @@
 
 ## Supported versions
 
-No stable release has been published. Report vulnerabilities against the default branch. Supported release lines will be listed here starting with v0.1.0.
+| Version | Supported |
+| --- | --- |
+| 0.1.x | yes |
+
+Before 1.0, only the latest minor release line receives fixes.
 
 ## Reporting a vulnerability
 
@@ -14,4 +18,15 @@ Do not open a public issue for a suspected vulnerability. Include the Zig versio
 
 Annotated release tags are signed by Andrey Maltsev. The signing key id is `2B1FC5CCF0740068`.
 
-A published release includes a source archive, SHA-256 checksums, SPDX and CycloneDX SBOMs, a keyless cosign bundle over the checksums, and GitHub artifact attestations.
+A release `vX.Y.Z` includes a source archive, SHA-256 checksums, SPDX and CycloneDX SBOMs, a keyless cosign bundle over the checksums, and GitHub artifact attestations. The Pkl package `zig` is published from the same commit as the GitHub release `zig@X.Y.Z`. Before a release is published, the workflow checks the signature, builds a consumer package against the archive with `zig fetch`, and compares the archive's package hash with the tag's.
+
+To verify a downloaded release:
+
+```sh
+git verify-tag v0.1.0
+sha256sum --check --ignore-missing SHA256SUMS
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.bundle \
+  --certificate-identity https://github.com/guanchzhou/zig-pkl/.github/workflows/release.yml@refs/tags/v0.1.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify zig-pkl-0.1.0.tar.gz --repo guanchzhou/zig-pkl
+```
