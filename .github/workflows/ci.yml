@@ -110,6 +110,11 @@ jobs:
           PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
         run: zig build conformance
 
+      - name: Examples
+        env:
+          PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
+        run: zig build examples
+
       - name: Code generation tests
         env:
           PKL_EXEC: ${{ runner.temp }}/pkl/${{ matrix.pkl_file }}
@@ -183,10 +188,10 @@ jobs:
           chmod +x "$PKL_EXEC"
           "$PKL_EXEC" --version
 
-      - name: Conformance and integration tests
+      - name: Conformance, integration tests, and examples
         env:
           PKL_EXEC: ${{ runner.temp }}/pkl/pkl
-        run: zig build conformance integration-test
+        run: zig build conformance integration-test examples
 
   checks:
     name: fuzz and links

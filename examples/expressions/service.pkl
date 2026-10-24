@@ -1,0 +1,7 @@
+module example.Service
+
+host = "api.example.com"
+port = 8443
+endpoints = List("/health", "/orders", "/users")
+
+function url(path: String): String = "https://\(host):\(port)\(path)"

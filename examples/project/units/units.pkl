@@ -1,0 +1,5 @@
+module units
+
+function kib(n: Int): DataSize = n.kib
+
+defaultTimeout: Duration = 10.s

@@ -24,6 +24,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    const docs_lib = b.addLibrary(.{ .name = "zig_pkl", .root_module = mod });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs_lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    b.step("docs", "Generate the API reference into zig-out/docs").dependOn(&install_docs.step);
+
     const run_step = b.step("run", "Print library information");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
@@ -130,8 +138,33 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&install_bench.step);
     bench_step.dependOn(&run_bench.step);
 
+    const examples_step = b.step("examples", "Build and run every example in examples/; needs Pkl");
+    for (examples) |name| {
+        const example = b.addExecutable(.{
+            .name = name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt("examples/{s}/main.zig", .{name})),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zig_pkl", .module = mod },
+                },
+            }),
+        });
+        const run = b.addRunArtifact(example);
+        run.setCwd(b.path(b.fmt("examples/{s}", .{name})));
+        run.has_side_effects = true;
+        run.addPassthruArgs();
+        b.step(b.fmt("example-{s}", .{name}), b.fmt("Run examples/{s}", .{name})).dependOn(&run.step);
+        examples_step.dependOn(&run.step);
+    }
+
     addCodegen(b, mod, test_mod, toolchain, target, optimize);
 }
+
+/// Single-file programs under `examples/<name>/main.zig`, each run from its
+/// own directory.
+const examples = [_][]const u8{ "typed", "dynamic", "expressions", "output", "project", "readers", "restricted", "external-reader", "concurrency", "errors" };
 
 /// Generator invocations whose output is checked in. `zig build codegen`
 /// refreshes them; `zig build codegen-test` fails when they are stale.

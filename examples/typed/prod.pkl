@@ -1,0 +1,22 @@
+amends "App.pkl"
+
+port = 443
+timeout = 2.min
+
+tags {
+  "api"
+  "production"
+}
+
+limits {
+  ["requests_per_second"] = 500
+  ["burst"] = 50
+}
+
+database {
+  host = "db.internal"
+  replicas {
+    "db-replica-1.internal"
+    "db-replica-2.internal"
+  }
+}

@@ -1,0 +1,19 @@
+module example.Site
+
+title = "zig-pkl"
+pages = List("index", "guide", "api")
+
+output {
+  renderer = new JsonRenderer {}
+  files {
+    for (page in pages) {
+      ["pages/\(page).yaml"] {
+        value = new Dynamic {
+          name = page
+          site = title
+        }
+        renderer = new YamlRenderer {}
+      }
+    }
+  }
+}

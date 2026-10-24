@@ -1,0 +1,12 @@
+amends "pkl:Project"
+
+dependencies {
+  ["units"] = import("units/PklProject")
+}
+
+evaluatorSettings {
+  timeout = 30.s
+  env {
+    ["DEPLOY_ENV"] = "staging"
+  }
+}

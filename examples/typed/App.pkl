@@ -1,0 +1,24 @@
+/// Settings for an inventory service.
+module example.App
+
+name: String = "inventory"
+
+port: UInt16 = 8080
+
+debug: Boolean = false
+
+timeout: Duration = 30.s
+
+maxUpload: DataSize = 25.mb
+
+tags: Listing<String>
+
+limits: Mapping<String, Int>
+
+database: Database
+
+class Database {
+  host: String
+  port: UInt16 = 5432
+  replicas: Listing<String>
+}

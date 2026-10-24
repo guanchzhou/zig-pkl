@@ -22,6 +22,8 @@ zig build integration-test   # uses PKL_EXEC or pkl on PATH; skips when absent u
 zig build conformance        # decoded values must match Pkl's own description; needs Pkl
 zig build fuzz               # bounded; tune with -Dfuzz-iterations and -Dfuzz-seed
 zig build check-links        # relative links in Markdown files
+zig build examples           # build and run every program in examples/; needs Pkl
+zig build docs               # API reference in zig-out/docs
 zig build codegen            # regenerate checked-in bindings; needs Pkl
 zig build codegen-test       # generator tests; live parts skip without Pkl unless ZIG_PKL_REQUIRE_PKL=1
 zig build bench -Doptimize=ReleaseFast -Dpkl=/path/to/pkl

@@ -1,0 +1,5 @@
+import "@units/units.pkl"
+
+environment = read("env:DEPLOY_ENV")
+bufferSize = units.kib(64)
+timeout = units.defaultTimeout
