@@ -43,6 +43,31 @@ pub fn fromPath(allocator: std.mem.Allocator, path: []const u8, style: PathStyle
     return out.toOwnedSlice(allocator);
 }
 
+/// The canonical absolute path of the existing file at `path`. Relative
+/// paths resolve against the current directory and symlinks resolve to
+/// their target. The caller owns the result.
+pub fn realFilePath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const length = file.realPath(io, &buffer) catch |err| switch (err) {
+        error.OperationUnsupported => {
+            if (!std.fs.path.isAbsolute(path)) return err;
+            return allocator.dupe(u8, path);
+        },
+        else => return err,
+    };
+    return allocator.dupe(u8, buffer[0..length]);
+}
+
+/// The `file:` URI of the existing file at `path`, as resolved by
+/// `realFilePath`. The caller owns the result.
+pub fn fromFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
+    const absolute = try realFilePath(allocator, io, path);
+    defer allocator.free(absolute);
+    return fromPath(allocator, absolute, .native);
+}
+
 /// Resolves a `/`-separated relative path against the directory of `base`,
 /// a hierarchical URI such as a `PklProject` file URI. Path bytes are
 /// percent-encoded as in `fromPath`.

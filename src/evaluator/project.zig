@@ -92,7 +92,7 @@ pub fn loadFile(
     evaluator: *manager.Evaluator,
     project_path: []const u8,
 ) !Owned {
-    const absolute = try absolutePath(allocator, io, project_path);
+    const absolute = try uri.realFilePath(allocator, io, project_path);
     defer allocator.free(absolute);
     const directory = std.fs.path.dirname(absolute) orelse return error.InvalidProject;
     const lock_path = try std.fs.path.join(allocator, &.{ directory, lock_file_name });
@@ -105,20 +105,6 @@ pub fn loadFile(
     const project_uri = try uri.fromPath(allocator, absolute, .native);
     defer allocator.free(project_uri);
     return load(allocator, evaluator, project_uri, lock_json);
-}
-
-fn absolutePath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const length = file.realPath(io, &buffer) catch |err| switch (err) {
-        error.OperationUnsupported => {
-            if (!std.fs.path.isAbsolute(path)) return err;
-            return allocator.dupe(u8, path);
-        },
-        else => return err,
-    };
-    return allocator.dupe(u8, buffer[0..length]);
 }
 
 /// Builds owned options from evaluated `evaluatorSettings` and `dependencies`
