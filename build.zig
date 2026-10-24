@@ -11,19 +11,6 @@ pub fn build(b: *std.Build) void {
     });
     mod.addAnonymousImport("zig_pkl_codegen_schema", .{ .root_source_file = b.path("codegen/Schema.pkl") });
 
-    const exe = b.addExecutable(.{
-        .name = "zig_pkl",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zig_pkl", .module = mod },
-            },
-        }),
-    });
-    b.installArtifact(exe);
-
     const docs_lib = b.addLibrary(.{ .name = "zig_pkl", .root_module = mod });
     const install_docs = b.addInstallDirectory(.{
         .source_dir = docs_lib.getEmittedDocs(),
@@ -38,11 +25,6 @@ pub fn build(b: *std.Build) void {
     site_cmd.setCwd(b.path("site"));
     site_cmd.has_side_effects = true;
     b.step("site", "Generate the website into site/.output/public; needs env, Bun, and `bun install` in site/").dependOn(&site_cmd.step);
-
-    const run_step = b.step("run", "Print library information");
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    run_cmd.step.dependOn(b.getInstallStep());
 
     const toolchain = testToolchain(b);
     const test_mod = b.createModule(.{
@@ -209,6 +191,9 @@ fn addCodegen(
             },
         }),
     });
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
+    generator.root_module.addOptions("build_options", build_options);
     b.installArtifact(generator);
 
     const codegen_step = b.step("codegen", "Regenerate the checked-in bindings; arguments after -- such as --check or --pkl are passed to every run");

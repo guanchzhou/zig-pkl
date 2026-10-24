@@ -3,6 +3,7 @@
 const std = @import("std");
 const zig_pkl = @import("zig_pkl");
 const codegen = zig_pkl.codegen;
+const build_options = @import("build_options");
 
 const usage =
     \\Usage: zig-pkl-gen [options] <module>...
@@ -26,6 +27,7 @@ const usage =
     \\  --check                   Exit with status 1 when any generated file is out of date
     \\  --force                   Overwrite or delete files the generator did not write
     \\  -h, --help                Show this help
+    \\  --version                 Print the zig-pkl version
     \\
     \\The output directory records the files it generated in .zig-pkl-gen-manifest.
     \\Other files, and generated files edited since, are never changed without --force.
@@ -62,6 +64,9 @@ pub fn main(init: std.process.Init) !u8 {
         const arg = args[index];
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try stdout.interface.writeAll(usage);
+            return 0;
+        } else if (std.mem.eql(u8, arg, "--version")) {
+            try stdout.interface.print("zig-pkl-gen {s}\n", .{build_options.version});
             return 0;
         } else if (std.mem.eql(u8, arg, "--check")) {
             options.check = true;
