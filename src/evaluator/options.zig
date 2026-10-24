@@ -70,20 +70,31 @@ pub const Options = struct {
     }
 
     pub fn validate(self: Options, pkl_version: version.Version) error{UnsupportedVersion}!void {
-        if (!pkl_version.atLeast(version.minimum_supported)) return error.UnsupportedVersion;
+        if (!pkl_version.atLeast(self.requiredVersion())) return error.UnsupportedVersion;
+    }
+
+    /// The oldest Pkl release that supports every option set here.
+    pub fn requiredVersion(self: Options) version.Version {
+        var required = version.minimum_supported;
         if (self.http) |http| {
-            if (http.ca_certificates != null or http.proxy != null) {
-                if (!pkl_version.atLeast(version.http_settings)) return error.UnsupportedVersion;
-            }
-            if (http.rewrites != null and !pkl_version.atLeast(version.http_rewrites)) return error.UnsupportedVersion;
-            if (http.headers != null and !pkl_version.atLeast(version.http_headers)) return error.UnsupportedVersion;
+            if (http.ca_certificates != null or http.proxy != null) required = newer(required, version.http_settings);
+            if (http.rewrites != null) required = newer(required, version.http_rewrites);
+            if (http.headers != null) required = newer(required, version.http_headers);
         }
-        if ((self.external_module_readers != null or self.external_resource_readers != null) and
-            !pkl_version.atLeast(version.external_readers))
-        {
-            return error.UnsupportedVersion;
+        if (self.external_module_readers != null or self.external_resource_readers != null) {
+            required = newer(required, version.external_readers);
         }
-        if (self.trace_mode != null and !pkl_version.atLeast(version.trace_mode)) return error.UnsupportedVersion;
+        if (self.trace_mode != null) required = newer(required, version.trace_mode);
+        return required;
+    }
+
+    /// True when some option needs a release newer than the oldest supported one.
+    pub fn usesNewerFeatures(self: Options) bool {
+        return self.requiredVersion().order(version.minimum_supported) == .gt;
+    }
+
+    fn newer(a: version.Version, b: version.Version) version.Version {
+        return if (a.atLeast(b)) a else b;
     }
 };
 
@@ -282,6 +293,11 @@ test "restricted defaults deny resources and older pkl rejects http headers" {
     try with_rewrites.validate(version.http_rewrites);
     const with_proxy = Options{ .http = .{ .proxy = .{ .address = "http://proxy" } } };
     try with_proxy.validate(.{ .major = 0, .minor = 26, .patch = 0 });
+
+    try std.testing.expect(!Options.preconfigured().usesNewerFeatures());
+    try std.testing.expect(with_proxy.usesNewerFeatures());
+    const combined = Options{ .http = .{ .proxy = .{ .address = "http://proxy" } }, .trace_mode = .compact };
+    try std.testing.expectEqual(version.trace_mode, combined.requiredVersion());
 
     var embed = reader.Embed{ .scheme_name = "mem", .entries = &.{} };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, allocateRequest, .{

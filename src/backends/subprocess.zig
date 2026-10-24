@@ -256,14 +256,16 @@ pub const Subprocess = struct {
             .wasi => return false,
             else => {
                 // The server usually exits within a few milliseconds of
-                // stdin closing, so polling starts fine and backs off.
-                const deadline = std.Io.Clock.awake.now(self.io).addDuration(.fromMilliseconds(timeout_ms));
+                // stdin closing: poll every 100 us for the first 20 ms, then
+                // back off.
+                const start = std.Io.Clock.awake.now(self.io);
+                const deadline = start.addDuration(.fromMilliseconds(timeout_ms));
                 var pause_us: i64 = 100;
                 while (true) {
                     if (self.reapWithoutBlocking()) return true;
                     if (deadline.untilNow(self.io, .awake).nanoseconds >= 0) return false;
                     self.io.sleep(.fromMicroseconds(pause_us), .awake) catch {};
-                    pause_us = @min(pause_us * 2, 5_000);
+                    if (start.untilNow(self.io, .awake).nanoseconds >= 20 * std.time.ns_per_ms) pause_us = @min(pause_us * 2, 5_000);
                 }
             },
         }
