@@ -48,6 +48,8 @@ pub const Quantity = struct {
     unit: []const u8,
 };
 
+/// Both fields are empty for values from Pkl before 0.30, which sends class
+/// and type alias values without a name.
 pub const TypeName = struct {
     name: []const u8,
     module_uri: []const u8,
@@ -491,10 +493,9 @@ fn readContainer(cursor: *msgpack.Decoder) Error!Value {
             return .{ .regex = pattern };
         },
         .class, .type_alias => {
-            if (len < 2) return error.InvalidValue;
-            const name = try cursor.readString();
+            const name = if (len >= 2) try cursor.readString() else "";
             const module_uri = if (len >= 3) try cursor.readString() else "";
-            try skipRest(cursor, len - @as(u32, if (len >= 3) 3 else 2));
+            try skipRest(cursor, len - @min(len, 3));
             const type_name = TypeName{ .name = name, .module_uri = module_uri };
             return if (code == .class) .{ .class = type_name } else .{ .type_alias = type_name };
         },
@@ -654,6 +655,10 @@ fn encodeQuantity(writer: *std.Io.Writer, code: Code, quantity: Quantity) std.Io
 }
 
 fn encodeTypeName(writer: *std.Io.Writer, code: Code, name: TypeName) std.Io.Writer.Error!void {
+    if (name.name.len == 0 and name.module_uri.len == 0) {
+        try msgpack.writeArrayHeader(writer, 1);
+        return writeCode(writer, code);
+    }
     try msgpack.writeArrayHeader(writer, 3);
     try writeCode(writer, code);
     try msgpack.writeString(writer, name.name);
@@ -860,6 +865,25 @@ test "legacy class and type alias values decode without module uri" {
     defer alias_tree.deinit();
     try std.testing.expectEqualStrings("legacy#Alias", alias_tree.root.type_alias.name);
     try std.testing.expectEqualStrings("", alias_tree.root.type_alias.module_uri);
+}
+
+test "class and type alias values from Pkl before 0.30 decode without a name" {
+    const allocator = std.testing.allocator;
+    for ([_]Code{ .class, .type_alias }) |code| {
+        const bytes = [_]u8{ 0x91, @backingInt(code) };
+        var tree = try decodeSlice(allocator, &bytes, .{});
+        defer tree.deinit();
+        const name = switch (tree.root.*) {
+            .class => |name| name,
+            .type_alias => |name| name,
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expectEqualStrings("", name.name);
+        try std.testing.expectEqualStrings("", name.module_uri);
+        const encoded = try encodeAlloc(allocator, tree.root);
+        defer allocator.free(encoded);
+        try std.testing.expectEqualSlices(u8, &bytes, encoded);
+    }
 }
 
 test "reference access distinguishes a nil subscript key" {
