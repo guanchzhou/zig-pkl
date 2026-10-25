@@ -5,10 +5,10 @@ zig-pkl needs Zig 0.17.0 and a `pkl` executable. It has no other dependencies.
 ## Add the package
 
 ```sh
-zig fetch --save https://github.com/guanchzhou/zig-pkl/releases/download/v0.1.0/zig-pkl-0.1.0.tar.gz
+zig fetch --save https://github.com/guanchzhou/zig-pkl/releases/download/v0.1.1/zig-pkl-0.1.1.tar.gz
 ```
 
-`zig fetch` records the URL and the package hash in `build.zig.zon`. The release page lists checksums, SBOMs, and a signature for the archive. `git+https://github.com/guanchzhou/zig-pkl#v0.1.0` fetches the same release from git, and `git+https://github.com/guanchzhou/zig-pkl` the latest commit.
+`zig fetch` records the URL and the package hash in `build.zig.zon`. The release page lists checksums, SBOMs, and a signature for the archive. `git+https://github.com/guanchzhou/zig-pkl#v0.1.1` fetches the same release from git, and `git+https://github.com/guanchzhou/zig-pkl` the latest commit.
 
 Import the module in `build.zig`:
 

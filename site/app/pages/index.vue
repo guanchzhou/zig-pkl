@@ -23,7 +23,7 @@ useSeoMeta({
           types, generate those types from Pkl schemas, and serve modules and resources from your
           own code.
         </p>
-        <pre class="install"><code>zig fetch --save git+https://github.com/guanchzhou/zig-pkl#v0.1.0</code></pre>
+        <pre class="install"><code>zig fetch --save git+https://github.com/guanchzhou/zig-pkl#v0.1.1</code></pre>
         <p class="actions">
           <NuxtLink to="/guides/quickstart" class="primary">Quick start</NuxtLink>
           <NuxtLink to="/guides/installation">Installation</NuxtLink>

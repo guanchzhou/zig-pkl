@@ -23,10 +23,10 @@ A release `vX.Y.Z` includes a source archive, SHA-256 checksums, SPDX and Cyclon
 To verify a downloaded release:
 
 ```sh
-git verify-tag v0.1.0
+git verify-tag v0.1.1
 sha256sum --check --ignore-missing SHA256SUMS
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.bundle \
-  --certificate-identity https://github.com/guanchzhou/zig-pkl/.github/workflows/release.yml@refs/tags/v0.1.0 \
+  --certificate-identity https://github.com/guanchzhou/zig-pkl/.github/workflows/release.yml@refs/tags/v0.1.1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-gh attestation verify zig-pkl-0.1.0.tar.gz --repo guanchzhou/zig-pkl
+gh attestation verify zig-pkl-0.1.1.tar.gz --repo guanchzhou/zig-pkl
 ```

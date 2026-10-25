@@ -571,7 +571,12 @@ const Planner = struct {
             const context = Context{ .module = module_index, .base = base, .location = property.location };
             var resolved: *const Type = undefined;
             if (property.zig_type) |raw| {
-                resolved = try self.make(.{ .raw = raw });
+                if (try rawTypeProblem(self.a, raw)) |problem| {
+                    try self.fail(property.location, "`@zig.Field.type` of `{s}` is not a single Zig type expression: {s}", .{ property.name, problem });
+                    resolved = try self.make(.{ .raw = "void" });
+                } else {
+                    resolved = try self.make(.{ .raw = raw });
+                }
             } else {
                 resolved = try self.resolve(property.type, context);
                 if (property.boxed) resolved = try self.box(resolved);
@@ -1097,12 +1102,17 @@ const Planner = struct {
         }
         const found = default orelse return null;
         switch (item.*) {
-            .bool => return if (found.kind == .bool) found.text else null,
+            .bool => {
+                if (found.kind != .bool) return null;
+                if (std.mem.eql(u8, found.text, "true")) return "true";
+                if (std.mem.eql(u8, found.text, "false")) return "false";
+                return null;
+            },
             .int => |name| {
                 if (found.kind != .int) return null;
                 const number = std.fmt.parseInt(i128, found.text, 10) catch return null;
                 if (!intFits(name, number)) return null;
-                return found.text;
+                return try std.fmt.allocPrint(self.a, "{d}", .{number});
             },
             .float => {
                 if (found.kind != .int and found.kind != .float) return null;
@@ -1337,7 +1347,7 @@ const Planner = struct {
     fn writeModule(self: *Planner, w: *std.Io.Writer, module_index: usize) (std.Io.Writer.Error || Error)!void {
         const module = &self.modules.items[module_index];
         const decl = self.decls.items[module.decl];
-        try w.print(header_prefix ++ "the Pkl module `{s}`. Regenerate this file instead of editing it.\n", .{module.info.name});
+        try w.print(header_prefix ++ "the Pkl module `{f}`. Regenerate this file instead of editing it.\n", .{fmtComment(module.info.name)});
         if (module.info.doc) |doc| {
             try w.writeAll("//!\n");
             try writeDoc(w, "//!", doc);
@@ -1687,8 +1697,98 @@ fn writeDoc(w: *std.Io.Writer, prefix: []const u8, doc: []const u8) std.Io.Write
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, doc, " \t\r\n"), '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trimEnd(u8, raw, " \t\r");
-        if (line.len == 0) try w.print("{s}\n", .{prefix}) else try w.print("{s} {s}\n", .{ prefix, line });
+        if (line.len == 0) try w.print("{s}\n", .{prefix}) else try w.print("{s} {f}\n", .{ prefix, fmtComment(line) });
     }
+}
+
+/// Formats text for a single comment line. Zig rejects control characters
+/// in comments, and a line break would end the comment.
+fn fmtComment(text: []const u8) std.fmt.Alt([]const u8, writeComment) {
+    return .{ .data = text };
+}
+
+fn writeComment(text: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    for (text) |byte| try w.writeByte(if (byte < 0x20 or byte == 0x7f) '?' else byte);
+}
+
+/// Why `text` cannot be written verbatim as a field type, or `null` when it
+/// is exactly one type expression without comments, declarations, or blocks.
+fn rawTypeProblem(a: Allocator, text: []const u8) error{OutOfMemory}!?[]const u8 {
+    const prefix = "const T = ";
+    const source = try std.mem.concatWithSentinel(a, u8, &.{ prefix, text, ";" }, 0);
+    var tree = try std.zig.Ast.parse(a, source, .{});
+    defer tree.deinit(a);
+    if (tree.errors.len != 0) return "it does not parse";
+    const decls = tree.rootDecls();
+    if (decls.len != 1) return "it does not parse as one expression";
+    const var_decl = tree.fullVarDecl(decls[0]) orelse return "it does not parse as one expression";
+    const init = var_decl.ast.init_node.unwrap() orelse return "it does not parse as one expression";
+    const semicolon: std.zig.Ast.TokenIndex = @intCast(tree.tokens.len - 2);
+    if (tree.firstToken(init) != 3 or tree.lastToken(init) + 1 != semicolon) return "it does not parse as one expression";
+    var token: std.zig.Ast.TokenIndex = 2;
+    while (token < semicolon) : (token += 1) {
+        switch (tree.tokenTag(token)) {
+            .doc_comment, .container_doc_comment => return "it contains a comment",
+            else => {},
+        }
+        const end = tree.tokenStart(token) + tree.tokenSlice(token).len;
+        const gap = source[end..tree.tokenStart(token + 1)];
+        if (std.mem.trim(u8, gap, " \t\r\n").len != 0) return "it contains a comment";
+    }
+    for (1..tree.nodes.len) |index| {
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(index));
+        if (node == decls[0]) continue;
+        switch (tree.nodeTag(node)) {
+            .identifier,
+            .field_access,
+            .optional_type,
+            .array_type,
+            .array_type_sentinel,
+            .ptr_type_aligned,
+            .ptr_type_sentinel,
+            .ptr_type,
+            .ptr_type_bit_range,
+            .error_union,
+            .merge_error_sets,
+            .error_set_decl,
+            .anyframe_type,
+            .fn_proto_simple,
+            .fn_proto_multi,
+            .fn_proto_one,
+            .fn_proto,
+            .call_one,
+            .call_one_comma,
+            .call,
+            .call_comma,
+            .builtin_call_two,
+            .builtin_call_two_comma,
+            .builtin_call,
+            .builtin_call_comma,
+            .grouped_expression,
+            .number_literal,
+            .char_literal,
+            .string_literal,
+            .enum_literal,
+            .container_decl,
+            .container_decl_trailing,
+            .container_decl_two,
+            .container_decl_two_trailing,
+            .container_decl_arg,
+            .container_decl_arg_trailing,
+            .tagged_union,
+            .tagged_union_trailing,
+            .tagged_union_two,
+            .tagged_union_two_trailing,
+            .tagged_union_enum_tag,
+            .tagged_union_enum_tag_trailing,
+            .container_field_init,
+            .container_field_align,
+            .container_field,
+            => {},
+            else => return "it contains declarations, blocks, or expressions that are not types",
+        }
+    }
+    return null;
 }
 
 fn literalName(a: Allocator, literal: []const u8) error{OutOfMemory}![]const u8 {

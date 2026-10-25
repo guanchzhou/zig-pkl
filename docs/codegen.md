@@ -52,7 +52,7 @@ The annotations live in [`codegen/zig.pkl`](../codegen/zig.pkl), published as th
 amends "pkl:Project"
 
 dependencies {
-  ["zig"] { uri = "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0.1.0" }
+  ["zig"] { uri = "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0.1.1" }
 }
 ```
 
@@ -63,7 +63,7 @@ A project can also depend on a checkout directly with `["zig"] = import("path/to
 | `@zig.Package { name = "a.b" }` | module | Writes the module to `a/b.zig`, reachable from the index as `a.b`. |
 | `@zig.Name { value = "id" }` | class, type alias, property | Uses `id` as the Zig name. |
 | `@zig.Field { boxed = true }` | property | Stores the value behind `*const`. |
-| `@zig.Field { type = "..." }` | property | Uses the Zig type expression verbatim. It must decode with `zig_pkl.convert`. |
+| `@zig.Field { type = "..." }` | property | Uses the Zig type expression verbatim. It must be a single type expression without comments, blocks, or declarations, and decode with `zig_pkl.convert`. |
 
 The annotations validate their arguments, so an invalid `@zig.Name` fails during Pkl evaluation with the constraint that it violates.
 

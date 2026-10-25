@@ -959,3 +959,72 @@ test "the type check rejects bindings that do not compile" {
     try std.testing.expect(diagnostics.contains("NoSuchType"));
     try std.testing.expect(!diagnostics.contains(".zig-cache/tmp"));
 }
+
+test "a field type must be exactly one type expression" {
+    const rejected = [_][]const u8{
+        "u8 = 0,\n pub fn evil() void {}\n y: u8",
+        "u8, y: u8",
+        "u8 // comment",
+        "struct { pub fn evil() void {} }",
+        "struct { const x = 1; }",
+        "[blk: {\n    break :blk 1;\n}]u8",
+        "",
+    };
+    inline for (rejected) |text| {
+        const modules = [_]schema.ModuleInfo{
+            module(app, "app", &.{prop("port", base("Int"), .{ .zig_type = text })}, .{}),
+        };
+        var planned = try run(&modules, .{});
+        defer planned.deinit();
+        try expectDiagnostic(planned, "`@zig.Field.type` of `port` is not a single Zig type expression");
+        try std.testing.expect(!planned.diagnostics.contains("internal error"));
+    }
+
+    const modules = [_]schema.ModuleInfo{
+        module(app, "app", &.{
+            prop("a", base("Int"), .{ .zig_type = "?*const std.ArrayList(u8)" }),
+            prop("b", base("Int"), .{ .zig_type = "[4:0]u8" }),
+            prop("c", base("Int"), .{ .zig_type = "*const fn (u8) error{Bad}!void" }),
+            prop("d", base("Int"), .{ .zig_type = "struct {\n    x: u8 = 0,\n}" }),
+        }, .{}),
+    };
+    var planned = try run(&modules, .{});
+    defer planned.deinit();
+    const text = planned.file("app.zig");
+    try expectContains(text, "a: ?*const std.ArrayList(u8),");
+    try expectContains(text, "b: [4:0]u8,");
+}
+
+test "control characters in module names and docs stay inside comments" {
+    const modules = [_]schema.ModuleInfo{
+        module(app, "app\npub fn evil() void {}", &.{
+            prop("port", base("Int"), .{ .doc = "Port.\x0bpub fn evil() void {}\r\x7f\nSecond line." }),
+        }, .{ .package_name = "app", .doc = "Docs\rpub fn evil() void {}" }),
+    };
+    var planned = try run(&modules, .{});
+    defer planned.deinit();
+    const text = planned.file("app.zig");
+    try expectContains(text, "//! Bindings for the Pkl module `app?pub fn evil() void {}`.");
+    try expectContains(text, "//! Docs?pub fn evil() void {}\n");
+    try expectContains(text, "/// Port.?pub fn evil() void {}??\n/// Second line.\n");
+    try std.testing.expect(std.mem.indexOf(u8, text, "\npub fn evil") == null);
+}
+
+test "integer and boolean defaults are rendered from their values" {
+    const modules = [_]schema.ModuleInfo{
+        module(app, "app", &.{
+            prop("a", base("Int"), .{ .default = scalar(.int, "1_000") }),
+            prop("b", base("Int"), .{ .default = scalar(.int, "+7") }),
+            prop("c", base("Boolean"), .{ .default = scalar(.bool, "false") }),
+            prop("d", base("Boolean"), .{ .default = scalar(.bool, "true; pub fn evil() void {}") }),
+        }, .{}),
+    };
+    var planned = try run(&modules, .{});
+    defer planned.deinit();
+    const text = planned.file("app.zig");
+    try expectContains(text, "a: i64 = 1000,");
+    try expectContains(text, "b: i64 = 7,");
+    try expectContains(text, "c: bool = false,");
+    try expectContains(text, "d: bool,");
+    try expectWarning(planned, "default value of `d` cannot be represented");
+}

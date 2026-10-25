@@ -484,7 +484,7 @@ fn optionalTimeout(settings: *const value.Value) Error!?i64 {
     if (item.* != .duration or !std.mem.eql(u8, item.duration.unit, "s")) return error.InvalidProject;
     const seconds = item.duration.value;
     if (!std.math.isFinite(seconds) or @floor(seconds) != seconds) return error.InvalidProject;
-    if (seconds < 0 or seconds > @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.Overflow;
+    if (seconds < 0 or seconds >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.Overflow;
     return @intFromFloat(seconds);
 }
 
@@ -776,4 +776,14 @@ test "reader executables resolve only when they name a path" {
     try std.testing.expectEqualStrings("/p", readers[0].working_dir.?);
     try std.testing.expectEqualStrings("/p/bin/reader", readers[1].executable);
     try std.testing.expectEqualStrings("/p/tmp", readers[1].working_dir.?);
+}
+
+test "timeouts that do not fit in i64 seconds overflow" {
+    var values = TestValues{};
+    values.init();
+    try std.testing.expectEqual(@as(?i64, 2), try optionalTimeout(&values.settings));
+    values.timeout.duration.value = 0x1p63;
+    try std.testing.expectError(error.Overflow, optionalTimeout(&values.settings));
+    values.timeout.duration.value = 0x1p62;
+    try std.testing.expectEqual(@as(?i64, 1 << 62), try optionalTimeout(&values.settings));
 }

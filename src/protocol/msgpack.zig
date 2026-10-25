@@ -146,7 +146,7 @@ pub const Decoder = struct {
     }
 
     pub fn skip(self: *Decoder) Error!void {
-        const header = try self.readHeader();
+        const header = try self.readHeaderAs(.discard);
         switch (header) {
             .nil, .boolean, .int, .float32, .float64, .string, .binary => {},
             .array => |len| {
@@ -245,7 +245,13 @@ pub const Decoder = struct {
         map: u32,
     };
 
+    const Payload = enum { read, discard };
+
     fn readHeader(self: *Decoder) Error!Header {
+        return self.readHeaderAs(.read);
+    }
+
+    fn readHeaderAs(self: *Decoder, comptime payload: Payload) Error!Header {
         const byte = try self.takeByte();
         switch (byte) {
             0x00...0x7f => return .{ .int = Integer.fromUnsigned(byte) },
@@ -253,9 +259,9 @@ pub const Decoder = struct {
             0xc0 => return .nil,
             0xc2 => return .{ .boolean = false },
             0xc3 => return .{ .boolean = true },
-            0xc4 => return .{ .binary = try self.readCountedBytes(try self.readUnsigned(u8)) },
-            0xc5 => return .{ .binary = try self.readCountedBytes(try self.readUnsigned(u16)) },
-            0xc6 => return .{ .binary = try self.readCountedBytes(try self.readUnsigned(u32)) },
+            0xc4 => return .{ .binary = try self.countedBytes(try self.readUnsigned(u8), payload) },
+            0xc5 => return .{ .binary = try self.countedBytes(try self.readUnsigned(u16), payload) },
+            0xc6 => return .{ .binary = try self.countedBytes(try self.readUnsigned(u32), payload) },
             0xc7 => {
                 const len = try self.readUnsigned(u8);
                 try self.discard(1);
@@ -310,16 +316,16 @@ pub const Decoder = struct {
                 try self.discard(17);
                 return error.Unsupported;
             },
-            0xd9 => return .{ .string = try self.readCountedBytes(try self.readUnsigned(u8)) },
-            0xda => return .{ .string = try self.readCountedBytes(try self.readUnsigned(u16)) },
-            0xdb => return .{ .string = try self.readCountedBytes(try self.readUnsigned(u32)) },
+            0xd9 => return .{ .string = try self.countedBytes(try self.readUnsigned(u8), payload) },
+            0xda => return .{ .string = try self.countedBytes(try self.readUnsigned(u16), payload) },
+            0xdb => return .{ .string = try self.countedBytes(try self.readUnsigned(u32), payload) },
             0xdc => return .{ .array = try self.collectionLength(try self.readUnsigned(u16)) },
             0xdd => return .{ .array = try self.collectionLength(try self.readUnsigned(u32)) },
             0xde => return .{ .map = try self.collectionLength(try self.readUnsigned(u16)) },
             0xdf => return .{ .map = try self.collectionLength(try self.readUnsigned(u32)) },
             0x80...0x8f => return .{ .map = try self.collectionLength(byte & 0x0f) },
             0x90...0x9f => return .{ .array = try self.collectionLength(byte & 0x0f) },
-            0xa0...0xbf => return .{ .string = try self.readCountedBytes(byte & 0x1f) },
+            0xa0...0xbf => return .{ .string = try self.countedBytes(byte & 0x1f, payload) },
             else => return error.Unsupported,
         }
     }
@@ -327,6 +333,14 @@ pub const Decoder = struct {
     fn collectionLength(self: *Decoder, len: u64) Error!u32 {
         if (len > std.math.maxInt(u32) or len > self.limits.max_collection) return error.LimitExceeded;
         return @intCast(len);
+    }
+
+    fn countedBytes(self: *Decoder, len: u64, comptime payload: Payload) Error![]u8 {
+        if (payload == .discard) {
+            try self.discard(len);
+            return &.{};
+        }
+        return self.readCountedBytes(len);
     }
 
     fn readCountedBytes(self: *Decoder, len: u64) Error![]u8 {
@@ -764,6 +778,16 @@ test "advertised collection allocations are bounded by max bytes" {
         &huge_map,
         .{ .max_collection = std.math.maxInt(u32), .max_bytes = 1024 },
     ));
+}
+
+test "skip discards payloads without allocating" {
+    const bytes = [_]u8{ 0x92, 0xa3, 'a', 'b', 'c', 0xc4, 0x02, 0x01, 0x02, 0xc0 };
+    var reader = std.Io.Reader.fixed(&bytes);
+    var decoder: Decoder = .{ .reader = &reader, .allocator = std.testing.failing_allocator, .limits = .{} };
+    try decoder.skip();
+    try std.testing.expectEqual(@as(usize, 9), decoder.bytes_read);
+    try std.testing.expectEqual(@as(usize, 0), decoder.allocation_bytes);
+    try decoder.readNil();
 }
 
 fn decodeOnly(allocator: std.mem.Allocator) !void {

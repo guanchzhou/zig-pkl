@@ -8,7 +8,7 @@
     },
     "package://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0": {
       "type": "local",
-      "uri": "projectpackage://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0.1.0",
+      "uri": "projectpackage://pkg.pkl-lang.org/github.com/guanchzhou/zig-pkl/zig@0.1.1",
       "path": "../../../codegen"
     }
   }

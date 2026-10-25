@@ -7,6 +7,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-25
+
+### Security
+
+- Code generation rejects a `@zig.Field.type` that is not exactly one Zig type expression, such as text that closes the field and declares functions or other fields, or that contains comments, blocks, or declarations. Before, the text was written into the bindings verbatim.
+- Control characters in module names and doc comments are written as `?` in generated comments, so a line break in a name or a carriage return in a doc comment can no longer end the comment and add code to the bindings.
+
+### Fixed
+
+- `project.load` rejects a `timeout` of 2^63 seconds with `error.Overflow` instead of converting it to an out-of-range `i64`.
+- Generated `Int` and `Boolean` defaults are written from the parsed value instead of the text Pkl reported, so a default such as `1_000` becomes `1000` and an unexpected text has no Zig default.
+- `msgpack.Decoder.skip` discards string and binary payloads without allocating or charging them to the allocation limit.
+
 ## [0.1.0] - 2026-10-24
 
 First release. It needs Zig 0.17.0 and Pkl 0.25.3 or newer; code generation needs Pkl 0.32.2.
@@ -42,5 +55,6 @@ First release. It needs Zig 0.17.0 and Pkl 0.25.3 or newer; code generation need
 - Ten runnable examples in `examples/`, run by `zig build examples`, and a code generation consumer in `examples/codegen`.
 - The website at <https://guanchzhou.github.io/zig-pkl/>, built by `zig build site`, with the API reference under `/api/`.
 
-[Unreleased]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/guanchzhou/zig-pkl/releases/tag/v0.1.0
