@@ -7,6 +7,32 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-25
+
+### Security
+
+- Code generation validates `@zig.Field.type` against a Zig AST allowlist, blocking builtin calls and non-literal default expressions.
+- `project.load` evaluates `PklProject` in a sandboxed configuration and clears `external_module_readers`, `http`, and `cache_dir` from inherited evaluator options.
+- `localDependencyFile` validates URI fragments before resolving local project dependency paths.
+- `output.writeFiles` enforces runtime `isSafePath` checks, refuses symlinks, and writes generated files atomically.
+- `reader.Filesystem` rejects paths containing colons or URI authority components.
+- MessagePack and `pkl-binary` decoders allocate container entries incrementally instead of trusting declared lengths up front, preventing pre-allocation amplification DoS.
+
+### Fixed
+
+- Code generation guards against cyclic type aliases and validates union overlap across resolved aliases.
+- `project.load` fixes a cross-allocator free bug and enforces strict percent-decoding on file URIs.
+- `Manager` rejects duplicate `request_id` and `evaluator_id` entries cleanly instead of overwriting active state.
+- `version.queryArgv` avoids pipe deadlocks when reading `pkl --version` output.
+- Subprocess teardown probes for remnant processes with signal 0 before reporting shutdown complete.
+- `Schema.pkl` tracks transitive `pkl:platform` taint across referenced modules when deciding whether to emit defaults.
+
+### Performance
+
+- `Schema.pkl` caches loaded module sources per module to avoid repeated reads during schema extraction.
+- `intoObject` uses `StaticStringMap` for single-pass field dispatch.
+- `plan.canonical` uses a per-file scratch arena to reduce allocator churn during code generation.
+
 ## [0.1.1] - 2026-10-25
 
 ### Security
@@ -55,6 +81,7 @@ First release. It needs Zig 0.17.0 and Pkl 0.25.3 or newer; code generation need
 - Ten runnable examples in `examples/`, run by `zig build examples`, and a code generation consumer in `examples/codegen`.
 - The website at <https://guanchzhou.github.io/zig-pkl/>, built by `zig build site`, with the API reference under `/api/`.
 
-[Unreleased]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/guanchzhou/zig-pkl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/guanchzhou/zig-pkl/releases/tag/v0.1.0

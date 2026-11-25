@@ -241,6 +241,7 @@ pub const Filesystem = struct {
         _ = self;
         const normalized = try decodedPath(allocator, uri);
         defer allocator.free(normalized);
+        if (std.mem.indexOfScalar(u8, normalized, ':') != null) return error.InvalidUri;
         return allocator.dupe(u8, normalized[1..]);
     }
 
@@ -333,22 +334,28 @@ pub fn schemeOf(uri: []const u8) ?[]const u8 {
 }
 
 pub fn uriPath(uri: []const u8) []const u8 {
-    const colon = std.mem.indexOfScalar(u8, uri, ':') orelse return uri;
-    var path = uri[colon + 1 ..];
+    return checkedUriPath(uri) catch "";
+}
+
+fn checkedUriPath(uri: []const u8) Error![]const u8 {
+    const colon = std.mem.indexOfScalar(u8, uri, ':');
+    var path = if (colon) |index| uri[index + 1 ..] else uri;
     if (std.mem.startsWith(u8, path, "//")) {
-        path = path[2..];
-        if (std.mem.indexOfScalar(u8, path, '/')) |index| path = path[index..];
+        const after = path[2..];
+        if (after.len == 0 or after[0] != '/') return error.InvalidUri;
+        path = after;
     }
     return path;
 }
 
 /// Returns the normalized absolute path of a hierarchical URI with percent
-/// escapes decoded. Query strings, fragments, backslashes, NUL, malformed
-/// escapes, and escapes that decode to `/`, a backslash, or NUL are
-/// rejected with `error.InvalidUri`; `..` segments that would leave the root
-/// fail with `error.PathEscapes`. A trailing slash is removed.
+/// escapes decoded. Query strings, fragments, backslashes, NUL, non-empty
+/// authorities, malformed escapes, and escapes that decode to `/`, a
+/// backslash, or NUL are rejected with `error.InvalidUri`; `..` segments that
+/// would leave the root fail with `error.PathEscapes`. A trailing slash is
+/// removed.
 pub fn decodedPath(allocator: std.mem.Allocator, uri: []const u8) Error![]u8 {
-    const raw = uriPath(uri);
+    const raw = try checkedUriPath(uri);
     if (std.mem.indexOfAny(u8, raw, "?#\\\x00") != null) return error.InvalidUri;
     const decoded = try allocator.alloc(u8, raw.len);
     defer allocator.free(decoded);
@@ -519,9 +526,26 @@ test "reader uri paths are percent-decoded and confined" {
     const decoded = try filesystem.resolve(allocator, "file:///a%20b/caf%C3%A9.pkl");
     defer allocator.free(decoded);
     try std.testing.expectEqualStrings("a b/café.pkl", decoded);
-    for ([_][]const u8{ "file:/a%2fb", "file:/a%5Cb", "file:/a%00", "file:/a%zz", "file:/a%2", "file:/a?q", "file:/a#f" }) |uri| {
+    for ([_][]const u8{
+        "file:/a%2fb",
+        "file:/a%5Cb",
+        "file:/a%00",
+        "file:/a%zz",
+        "file:/a%2",
+        "file:/a?q",
+        "file:/a#f",
+        "file:/a:b",
+        "file:/C%3a/a",
+        "file://evil.com/a",
+        "file://foo",
+        "file://",
+    }) |uri| {
         try std.testing.expectError(error.InvalidUri, filesystem.resolve(allocator, uri));
     }
+    try std.testing.expectEqualStrings("", uriPath("file://evil.com/a"));
+    try std.testing.expectEqualStrings("", uriPath("file://foo"));
+    try std.testing.expectError(error.InvalidUri, decodedPath(allocator, "mem://host/a"));
+    try std.testing.expectError(error.InvalidUri, decodedPath(allocator, "mem://host"));
     try std.testing.expectError(error.PathEscapes, filesystem.resolve(allocator, "file:/a/%2e%2e/%2e%2e/etc"));
 }
 

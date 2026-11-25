@@ -68,6 +68,8 @@ pub fn queryArgv(allocator: std.mem.Allocator, io: std.Io, argv: []const []const
     var buffer: [512]u8 = undefined;
     var reader = child.stdout.?.readerStreaming(io, &buffer);
     const parsed = if (reader.interface.takeDelimiter('\n') catch null) |line| Version.parse(line) else error.InvalidVersion;
+    child.stdout.?.close(io);
+    child.stdout = null;
     const term = try child.wait(io);
     if (!term.success()) return error.CommandFailed;
     return parsed;
@@ -150,4 +152,17 @@ test "probing runs the wrapper with the version argument" {
         else => return err,
     };
     try std.testing.expectEqual(Version{ .major = 0, .minor = 29, .patch = 1 }, probed);
+}
+
+test "queryArgv closes stdout before waiting so noisy children do not deadlock" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const result = queryArgv(std.testing.allocator, std.testing.io, &.{
+        "/bin/sh",
+        "-c",
+        "echo 'Pkl 0.32.2 (noisy)'; dd if=/dev/zero bs=1024 count=256 2>/dev/null; exit 0",
+    }) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    try std.testing.expectEqual(Version{ .major = 0, .minor = 32, .patch = 2 }, result);
 }

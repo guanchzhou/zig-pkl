@@ -1028,3 +1028,79 @@ test "integer and boolean defaults are rendered from their values" {
     try expectContains(text, "d: bool,");
     try expectWarning(planned, "default value of `d` cannot be represented");
 }
+
+test "field type allowlist rejects builtins and calls inside container field defaults" {
+    const rejected = [_][]const u8{
+        "@embedFile(\"/etc/passwd\")",
+        "@compileError(\"boom\")",
+        "@import(\"std\")",
+        "@cImport({})",
+        "struct { x: u8 = @embedFile(\"x\")[0] }",
+        "struct { x: u8 = evil() }",
+        "struct { x: u8 = std.mem.zeroes(u8) }",
+    };
+    inline for (rejected) |text| {
+        const modules = [_]schema.ModuleInfo{
+            module(app, "app", &.{prop("port", base("Int"), .{ .zig_type = text })}, .{}),
+        };
+        var planned = try run(&modules, .{});
+        defer planned.deinit();
+        try expectDiagnostic(planned, "`@zig.Field.type` of `port` is not a single Zig type expression");
+    }
+
+    const allowed = [_]schema.ModuleInfo{
+        module(app, "app", &.{
+            prop("cfg", base("Int"), .{ .zig_type = "struct { x: u8 = 0, name: []const u8 = \"ok\", flag: bool = true }" }),
+        }, .{}),
+    };
+    var planned = try run(&allowed, .{});
+    defer planned.deinit();
+    try std.testing.expect(!planned.diagnostics.hasErrors());
+}
+
+test "cyclic non-generic and generic type aliases terminate with diagnostics" {
+    const mutual = [_]schema.ModuleInfo{
+        module(app, "app", &.{
+            prop("val", alias(app, "A", &.{}), .{ .default = scalar(.int, "1") }),
+        }, .{
+            .aliases = &.{
+                aliasInfo("A", &.{}, alias(app, "B", &.{})),
+                aliasInfo("B", &.{}, nullable(alias(app, "A", &.{}))),
+            },
+        }),
+    };
+    var planned_mutual = try run(&mutual, .{});
+    defer planned_mutual.deinit();
+    try expectDiagnostic(planned_mutual, "type alias `A` is cyclic");
+
+    const generic_cycle = [_]schema.ModuleInfo{
+        module(app, "app", &.{
+            prop("loop", alias(app, "Loop", &.{base("Int")}), .{}),
+        }, .{
+            .aliases = &.{
+                aliasInfo("Loop", &.{"T"}, alias(app, "Loop", &.{variable("T")})),
+            },
+        }),
+    };
+    var planned_generic = try run(&generic_cycle, .{});
+    defer planned_generic.deinit();
+    try expectDiagnostic(planned_generic, "type alias expansion is cyclic or exceeds maximum depth");
+}
+
+test "union overlap detection resolves non-generic type aliases" {
+    const modules = [_]schema.ModuleInfo{
+        module(app, "app", &.{
+            prop("mixed", unionOf(&.{ alias(app, "MyInt", &.{}), baseAlias("Int32") }), .{}),
+            prop("same", unionOf(&.{ alias(app, "MyStr", &.{}), base("String") }), .{}),
+        }, .{
+            .aliases = &.{
+                aliasInfo("MyInt", &.{}, base("Int")),
+                aliasInfo("MyStr", &.{}, base("String")),
+            },
+        }),
+    };
+    var planned = try run(&modules, .{});
+    defer planned.deinit();
+    try expectDiagnostic(planned, "union members `MyInt` and `Int32` accept the same values");
+    try expectDiagnostic(planned, "union members `MyStr` and `String` decode to the same Zig type");
+}

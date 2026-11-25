@@ -390,7 +390,8 @@ pub const Manager = struct {
                     return error.Rejected;
                 }
                 const evaluator_id = body.evaluator_id orelse return error.Protocol;
-                errdefer self.transport.send(&.{ .close_evaluator = .{ .evaluator_id = evaluator_id } }) catch {};
+                var close_on_err = true;
+                errdefer if (close_on_err) self.transport.send(&.{ .close_evaluator = .{ .evaluator_id = evaluator_id } }) catch {};
                 const evaluator = try self.allocator.create(Evaluator);
                 errdefer self.allocator.destroy(evaluator);
                 evaluator.* = .{
@@ -404,6 +405,10 @@ pub const Manager = struct {
                 };
                 self.mutex.lockUncancelable(self.io);
                 defer self.mutex.unlock(self.io);
+                if (self.evaluators.contains(evaluator_id)) {
+                    close_on_err = false;
+                    return error.Protocol;
+                }
                 try self.owned_evaluators.ensureUnusedCapacity(self.allocator, 1);
                 try self.evaluators.put(self.allocator, evaluator_id, evaluator);
                 self.owned_evaluators.appendAssumeCapacity(evaluator);
@@ -765,9 +770,14 @@ fn complete(self: *Manager, request_id: i64, incoming: message.Owned) void {
     var late_evaluator: ?i64 = null;
     self.mutex.lockUncancelable(self.io);
     if (self.pending.get(request_id)) |pending| {
-        pending.message = incoming;
-        pending.done = true;
-        pending.cond.signal(self.io);
+        if (pending.done) {
+            var duplicate = incoming;
+            duplicate.deinit();
+        } else {
+            pending.message = incoming;
+            pending.done = true;
+            pending.cond.signal(self.io);
+        }
     } else {
         switch (incoming.message) {
             .create_evaluator_response => |body| {
@@ -875,22 +885,29 @@ fn replyText(self: *Manager, incoming: message.Owned, text: []const u8) void {
     }
 }
 
+fn sendResponse(self: *Manager, payload: *const message.Message) void {
+    self.transport.send(payload) catch |err| switch (err) {
+        error.OutOfMemory, error.MissingField, error.LimitExceeded => {},
+        else => self.markTerminal(err),
+    };
+}
+
 fn sendModule(self: *Manager, body: message.ReadModuleRequest, contents: ?[]const u8, error_message: ?[]const u8) void {
-    self.transport.send(&.{ .read_module_response = .{
+    sendResponse(self, &.{ .read_module_response = .{
         .request_id = body.request_id,
         .evaluator_id = body.evaluator_id,
         .contents = contents,
         .error_message = error_message,
-    } }) catch {};
+    } });
 }
 
 fn sendResource(self: *Manager, body: message.ReadResourceRequest, contents: ?[]const u8, error_message: ?[]const u8) void {
-    self.transport.send(&.{ .read_resource_response = .{
+    sendResponse(self, &.{ .read_resource_response = .{
         .request_id = body.request_id,
         .evaluator_id = body.evaluator_id,
         .contents = contents,
         .error_message = error_message,
-    } }) catch {};
+    } });
 }
 
 fn sendList(
@@ -906,10 +923,10 @@ fn sendList(
         .path_elements = elements,
         .error_message = error_message,
     };
-    self.transport.send(if (modules)
+    sendResponse(self, if (modules)
         &.{ .list_modules_response = response }
     else
-        &.{ .list_resources_response = response }) catch {};
+        &.{ .list_resources_response = response });
 }
 
 fn freeElements(allocator: std.mem.Allocator, elements: []message.PathElement) void {
@@ -1661,4 +1678,91 @@ test "reader callbacks run on a bounded pool and overflow is refused" {
     manager.mutex.lockUncancelable(io);
     defer manager.mutex.unlock(io);
     try std.testing.expectEqual(@as(usize, 1), manager.workers_started);
+}
+
+test "duplicate evaluator_id is rejected with Protocol without clobbering existing evaluator" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var script = Script{ .allocator = allocator, .io = io };
+    defer script.deinit();
+    const manager = try Manager.initWithBackend(allocator, io, script.transport(), logger.Logger.noop);
+    defer manager.deinit();
+
+    const responder = try std.Thread.spawn(.{}, struct {
+        fn run(s: *Script) void {
+            var first = s.takeMessage() catch return;
+            defer first.deinit();
+            s.push(.{ .create_evaluator_response = .{
+                .request_id = first.message.requestId().?,
+                .evaluator_id = 7,
+            } }) catch {};
+            var second = s.takeMessage() catch return;
+            defer second.deinit();
+            s.push(.{ .create_evaluator_response = .{
+                .request_id = second.message.requestId().?,
+                .evaluator_id = 7,
+            } }) catch {};
+        }
+    }.run, .{&script});
+
+    var rejected: ?[]u8 = null;
+    defer if (rejected) |text| allocator.free(text);
+    const eval1 = try manager.createEvaluator(test_options, &rejected);
+    defer eval1.close();
+    try std.testing.expectError(error.Protocol, manager.createEvaluator(test_options, &rejected));
+    responder.join();
+
+    manager.mutex.lockUncancelable(io);
+    defer manager.mutex.unlock(io);
+    try std.testing.expectEqual(eval1, manager.evaluators.get(7).?);
+}
+
+test "complete frees duplicate response without leaking" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var script = Script{ .allocator = allocator, .io = io };
+    defer script.deinit();
+    const manager = try Manager.initWithBackend(allocator, io, script.transport(), logger.Logger.noop);
+    defer manager.deinit();
+
+    const pending = try manager.beginRequest(99);
+    defer manager.finish(99, pending);
+
+    const enc1 = try message.encodeAlloc(allocator, .{ .evaluate_response = .{
+        .request_id = 99,
+        .evaluator_id = 1,
+        .error_message = "first",
+    } });
+    defer allocator.free(enc1);
+    const msg1 = try message.decodeSlice(allocator, enc1);
+    complete(manager, 99, msg1);
+
+    const enc2 = try message.encodeAlloc(allocator, .{ .evaluate_response = .{
+        .request_id = 99,
+        .evaluator_id = 1,
+        .error_message = "duplicate",
+    } });
+    defer allocator.free(enc2);
+    const msg2 = try message.decodeSlice(allocator, enc2);
+    complete(manager, 99, msg2);
+
+    try std.testing.expect(pending.done);
+    try std.testing.expectEqualStrings("first", pending.message.?.message.evaluate_response.error_message.?);
+}
+
+test "transport error in reader response marks manager terminal" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var script = Script{ .allocator = allocator, .io = io };
+    defer script.deinit();
+    const manager = try Manager.initWithBackend(allocator, io, script.transport(), logger.Logger.noop);
+    defer manager.deinit();
+
+    script.mutex.lockUncancelable(io);
+    script.closed = true;
+    script.mutex.unlock(io);
+    sendModule(manager, .{ .request_id = 1, .evaluator_id = 1, .uri = "mem:/a.pkl" }, null, "err");
+    manager.mutex.lockUncancelable(io);
+    defer manager.mutex.unlock(io);
+    try std.testing.expectEqual(error.Closed, manager.terminal.?);
 }

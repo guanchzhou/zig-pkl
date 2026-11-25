@@ -125,22 +125,32 @@ pub const Decoder = struct {
                 try self.pushDepth();
                 defer self.popDepth();
                 try self.reserveCollection(len, @sizeOf(Value), 1);
-                const items = try self.allocator.alloc(Value, len);
-                for (items) |*item| item.* = try self.readDom();
-                break :blk .{ .array = items };
+                var items: std.ArrayList(Value) = .empty;
+                errdefer items.deinit(self.allocator);
+                const initial = self.initialCapacity(len, 1);
+                if (initial != 0) try items.ensureTotalCapacity(self.allocator, initial);
+                var index: u32 = 0;
+                while (index < len) : (index += 1) {
+                    try items.append(self.allocator, try self.readDom());
+                }
+                break :blk .{ .array = try items.toOwnedSlice(self.allocator) };
             },
             .map => |len| blk: {
                 try self.pushDepth();
                 defer self.popDepth();
                 try self.reserveCollection(len, @sizeOf(Value.Entry), 2);
-                const items = try self.allocator.alloc(Value.Entry, len);
-                for (items) |*item| {
-                    item.* = .{
+                var items: std.ArrayList(Value.Entry) = .empty;
+                errdefer items.deinit(self.allocator);
+                const initial = self.initialCapacity(len, 2);
+                if (initial != 0) try items.ensureTotalCapacity(self.allocator, initial);
+                var index: u32 = 0;
+                while (index < len) : (index += 1) {
+                    try items.append(self.allocator, .{
                         .key = try self.readDom(),
                         .value = try self.readDom(),
-                    };
+                    });
                 }
-                break :blk .{ .map = items };
+                break :blk .{ .map = try items.toOwnedSlice(self.allocator) };
             },
         };
     }
@@ -343,14 +353,48 @@ pub const Decoder = struct {
         return self.readCountedBytes(len);
     }
 
+    pub const max_initial_bytes: usize = 64 * 1024;
+    pub const max_initial_collection: usize = 1024;
+
+    pub fn initialCapacity(self: *const Decoder, len: u32, min_wire_bytes: usize) usize {
+        const available = self.reader.bufferedLen() / min_wire_bytes;
+        return @min(@as(usize, len), @min(max_initial_collection, available));
+    }
+
     fn readCountedBytes(self: *Decoder, len: u64) Error![]u8 {
         if (len > std.math.maxInt(usize)) return error.LimitExceeded;
         const size: usize = @intCast(len);
         try self.reserveBytes(size);
-        const raw = try self.allocator.alloc(u8, size);
-        self.reader.readSliceAll(raw) catch |err| return mapRead(err);
-        self.bytes_read += size;
-        return raw;
+        if (size == 0) return self.allocator.alloc(u8, 0);
+        if (size <= max_initial_bytes and self.reader.bufferedLen() >= size) {
+            const raw = try self.allocator.alloc(u8, size);
+            errdefer self.allocator.free(raw);
+            self.reader.readSliceAll(raw) catch |err| return mapRead(err);
+            self.bytes_read += size;
+            return raw;
+        }
+        if (self.reader.bufferedLen() >= size) {
+            const raw = try self.allocator.alloc(u8, size);
+            errdefer self.allocator.free(raw);
+            self.reader.readSliceAll(raw) catch |err| return mapRead(err);
+            self.bytes_read += size;
+            return raw;
+        }
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+        var remaining = size;
+        var chunk: [4096]u8 = undefined;
+        while (remaining > 0) {
+            const want = @min(remaining, chunk.len);
+            self.reader.readSliceAll(chunk[0..want]) catch |err| return mapRead(err);
+            if (out.capacity == 0) {
+                try out.ensureTotalCapacity(self.allocator, @min(size, max_initial_bytes));
+            }
+            try out.appendSlice(self.allocator, chunk[0..want]);
+            self.bytes_read += want;
+            remaining -= want;
+        }
+        return out.toOwnedSlice(self.allocator);
     }
 
     fn readUnsigned(self: *Decoder, comptime T: type) Error!u64 {
@@ -797,4 +841,55 @@ fn decodeOnly(allocator: std.mem.Allocator) !void {
 
 test "messagepack decode frees partial allocations on failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, decodeOnly, .{});
+}
+
+test "truncated large headers do not pre-allocate advertised payload sizes" {
+    // 5-byte headers claiming 32 MiB string/binary or 1M array/map entries must fail
+    // with error.Truncated without allocating megabytes upfront.
+    const crafted = [_][]const u8{
+        &.{ 0xdb, 0x02, 0x00, 0x00, 0x00 }, // str32 32 MiB
+        &.{ 0xc6, 0x02, 0x00, 0x00, 0x00 }, // bin32 32 MiB
+        &.{ 0xdd, 0x00, 0x10, 0x00, 0x00 }, // array32 1,048,576 items
+        &.{ 0xdf, 0x00, 0x08, 0x00, 0x00 }, // map32 524,288 entries
+    };
+    for (crafted) |bytes| {
+        var buf: [4096]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        try std.testing.expectError(error.Truncated, decodeSlice(fba.allocator(), bytes, .{}));
+    }
+
+    // Streaming read exceeding max_initial_bytes still succeeds incrementally.
+    const allocator = std.testing.allocator;
+    const big = try allocator.alloc(u8, 80 * 1024);
+    defer allocator.free(big);
+    @memset(big, 0x3c);
+    const encoded = try encodeAlloc(allocator, .{ .binary = big });
+    defer allocator.free(encoded);
+    const Chunked = struct {
+        data: []const u8,
+        pos: usize = 0,
+        reader: std.Io.Reader,
+
+        fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+            const self: *@This() = @fieldParentPtr("reader", r);
+            if (self.pos >= self.data.len) return error.EndOfStream;
+            const n = @min(@min(self.data.len - self.pos, 1024), @backingInt(limit));
+            const written = try w.write(self.data[self.pos..][0..n]);
+            self.pos += written;
+            return written;
+        }
+    };
+    var chunk_buf: [1024]u8 = undefined;
+    var chunked = Chunked{
+        .data = encoded,
+        .reader = .{
+            .vtable = &.{ .stream = Chunked.stream },
+            .buffer = &chunk_buf,
+            .seek = 0,
+            .end = 0,
+        },
+    };
+    var doc = try decodeReader(allocator, &chunked.reader, .{});
+    defer doc.deinit();
+    try std.testing.expectEqualSlices(u8, big, doc.root.binary);
 }

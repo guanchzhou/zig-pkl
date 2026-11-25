@@ -112,7 +112,9 @@ pub fn generate(
     if (options.project_dir) |dir| {
         const project_path = try std.fs.path.join(allocator, &.{ dir, "PklProject" });
         defer allocator.free(project_path);
-        const loader = pkl.createEvaluator(options_mod.Options.preconfigured(), &rejected) catch |err| {
+        var loader_options = options_mod.Options.preconfigured();
+        sandbox(&loader_options, &.{});
+        const loader = pkl.createEvaluator(loader_options, &rejected) catch |err| {
             try reportRejected(diagnostics, err, rejected);
             return error.CodegenFailed;
         };
@@ -212,6 +214,7 @@ fn localDependencyFile(
     const package = module_uri[prefix.len..hash];
     const fragment = module_uri[hash + 1 ..];
     if (fragment.len == 0 or fragment[0] != '/') return null;
+    if (!output.isSafePath(fragment[1..])) return null;
     const project_file = findLocal(dependencies, package) orelse return null;
     const file_prefix = "file://";
     if (!std.mem.startsWith(u8, project_file, file_prefix)) return null;
@@ -268,6 +271,10 @@ test "a local dependency module maps to its file" {
     try std.testing.expectEqualStrings("^file:(?://)?/work/leaf/y\\.pkl$", nested);
     try std.testing.expect(try localDependencyFile(allocator, &dependencies, "package://example.com/dep@1.0.0#/x.pkl") == null);
     try std.testing.expect(try localDependencyFile(allocator, &dependencies, "projectpackage://example.com/other@1.0.0#/x.pkl") == null);
+    try std.testing.expect(try localDependencyFile(allocator, &dependencies, "projectpackage://example.com/dep@1.0.0#/../secret.pkl") == null);
+    try std.testing.expect(try localDependencyFile(allocator, &dependencies, "projectpackage://example.com/dep@1.0.0#/sub/../../secret.pkl") == null);
+    try std.testing.expect(try localDependencyFile(allocator, &dependencies, "projectpackage://example.com/dep@1.0.0#/sub\\x.pkl") == null);
+    try std.testing.expect(try localDependencyFile(allocator, &dependencies, "projectpackage://example.com/dep@1.0.0#/a:b.pkl") == null);
 }
 
 /// Appends `item`, which the list then owns, or frees it when the append fails.
@@ -302,6 +309,9 @@ fn sandbox(options: *options_mod.Options, allowed_resources: []const []const u8)
     options.allowed_resources = allowed_resources;
     options.resource_readers = &.{};
     options.external_resource_readers = null;
+    options.external_module_readers = null;
+    options.http = null;
+    options.cache_dir = null;
     if (!allowsScheme(allowed_resources, "env:")) options.env = &.{};
     if (!allowsScheme(allowed_resources, "prop:")) options.properties = &.{};
 }
@@ -352,10 +362,17 @@ test "scheme detection leaves paths and drive letters alone" {
 
 test "the sandbox hides resources, environment, and properties by default" {
     var options = options_mod.Options.preconfigured();
+    options.external_module_readers = &.{.{ .scheme = "ext", .executable = "reader" }};
+    options.http = .{ .proxy = .{ .address = "http://127.0.0.1:8080" } };
+    options.cache_dir = "/tmp/cache";
     sandbox(&options, &.{});
     try std.testing.expectEqual(@as(usize, 0), options.allowed_resources.?.len);
     try std.testing.expectEqual(@as(usize, 0), options.env.?.len);
     try std.testing.expectEqual(@as(usize, 0), options.properties.?.len);
+    try std.testing.expect(options.external_module_readers == null);
+    try std.testing.expect(options.external_resource_readers == null);
+    try std.testing.expect(options.http == null);
+    try std.testing.expect(options.cache_dir == null);
 
     var opened = options_mod.Options.preconfigured();
     sandbox(&opened, &.{ "env:", "file:" });

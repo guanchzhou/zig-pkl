@@ -89,6 +89,7 @@ pub fn plan(gpa: Allocator, description: schema.Description, options: Options, d
     }
     var planner = Planner{
         .a = arena.allocator(),
+        .gpa = gpa,
         .description = description,
         .options = options,
         .diagnostics = diagnostics,
@@ -223,11 +224,40 @@ const Env = struct {
     args_env: ?*const Env,
 };
 
+const max_type_depth: u32 = 64;
+
+const DeclSet = struct {
+    items: [max_type_depth]DeclId = undefined,
+    len: usize = 0,
+
+    fn contains(self: *const DeclSet, id: DeclId) bool {
+        for (self.items[0..self.len]) |seen| if (seen == id) return true;
+        return false;
+    }
+
+    fn push(self: *DeclSet, id: DeclId) bool {
+        if (self.len >= self.items.len or self.contains(id)) return false;
+        self.items[self.len] = id;
+        self.len += 1;
+        return true;
+    }
+
+    fn pop(self: *DeclSet) void {
+        self.len -= 1;
+    }
+};
+
+const UnionCheck = struct {
+    decl: DeclId,
+    location: []const u8,
+};
+
 const Context = struct {
     module: usize,
     base: []const u8,
     location: []const u8,
     env: ?*const Env = null,
+    depth: u32 = 0,
 };
 
 const file_reserved = [_][]const u8{
@@ -241,6 +271,7 @@ const enum_reserved = [_][]const u8{"pkl_names"};
 
 const Planner = struct {
     a: Allocator,
+    gpa: Allocator,
     description: schema.Description,
     options: Options,
     diagnostics: *Diagnostics,
@@ -248,6 +279,7 @@ const Planner = struct {
     by_uri: std.StringHashMapUnmanaged(usize) = .empty,
     decls: std.ArrayList(Decl) = .empty,
     classes: std.ArrayList(ClassState) = .empty,
+    unions: std.ArrayList(UnionCheck) = .empty,
     scc: []usize = &.{},
     self_loops: []bool = &.{},
     scc_size: []usize = &.{},
@@ -545,6 +577,8 @@ const Planner = struct {
                 try self.resolveAliasDecl(module_index, decl, alias);
             }
         }
+        try self.detectAliasCycles();
+        try self.validateUnions();
         for (self.classes.items, 0..) |class, index| {
             const decl = &self.decls.items[class.decl];
             if (!decl.is_module and class.info.is_abstract and class.concrete_descendants.items.len != 0) {
@@ -556,6 +590,61 @@ const Planner = struct {
                 .pkl_class = class.qualified,
                 .subclasses = try self.subclassNames(class),
             } };
+        }
+    }
+
+    fn detectAliasCycles(self: *Planner) Error!void {
+        for (self.modules.items) |*module| {
+            for (module.info.aliases) |*alias| {
+                const decl = module.alias_decls.get(alias.name) orelse continue;
+                if (self.decls.items[decl].body != .alias) continue;
+                var visited = DeclSet{};
+                _ = visited.push(decl);
+                if (self.aliasHasCycle(self.decls.items[decl].body.alias, &visited)) {
+                    try self.fail(alias.location, "type alias `{s}` is cyclic", .{alias.name});
+                }
+            }
+        }
+    }
+
+    fn aliasHasCycle(self: *Planner, item: *const Type, visited: *DeclSet) bool {
+        return switch (item.*) {
+            .decl => |id| switch (self.decls.items[id].body) {
+                .alias => |inner| blk: {
+                    if (visited.contains(id)) break :blk true;
+                    if (!visited.push(id)) break :blk true;
+                    defer visited.pop();
+                    break :blk self.aliasHasCycle(inner, visited);
+                },
+                else => false,
+            },
+            .optional, .slice, .boxed => |inner| self.aliasHasCycle(inner, visited),
+            .map, .pair, .reference => |pair| self.aliasHasCycle(pair[0], visited) or self.aliasHasCycle(pair[1], visited),
+            else => false,
+        };
+    }
+
+    fn validateUnions(self: *Planner) Error!void {
+        for (self.unions.items) |entry| {
+            const variants = switch (self.decls.items[entry.decl].body) {
+                .@"union" => |items| items,
+                else => continue,
+            };
+            var seen: std.StringHashMapUnmanaged([]const u8) = .empty;
+            var overlapping: std.StringHashMapUnmanaged([]const u8) = .empty;
+            for (variants) |variant| {
+                const resolved = variant.type orelse continue;
+                const key = try self.typeKey(resolved, false);
+                const overlap_key = try self.typeKey(resolved, true);
+                if (seen.get(key)) |other| {
+                    try self.fail(entry.location, "union members `{s}` and `{s}` decode to the same Zig type; Zig bindings cannot tell them apart", .{ other, variant.label });
+                } else if (overlapping.get(overlap_key)) |other| {
+                    try self.fail(entry.location, "union members `{s}` and `{s}` accept the same values; Zig bindings cannot tell them apart", .{ other, variant.label });
+                } else {
+                    try seen.put(self.a, key, variant.label);
+                    try overlapping.put(self.a, overlap_key, variant.label);
+                }
+            }
         }
     }
 
@@ -713,12 +802,18 @@ const Planner = struct {
     }
 
     fn resolve(self: *Planner, info: TypeInfo, context: Context) Error!*const Type {
+        if (context.depth >= max_type_depth) {
+            try self.fail(context.location, "type alias expansion is cyclic or exceeds maximum depth", .{});
+            return self.make(.dynamic);
+        }
+        var next_context = context;
+        next_context.depth += 1;
         switch (info.kind) {
             .class => {
                 const module_uri = info.module_uri orelse "";
                 const name = info.name orelse "";
-                if (std.mem.eql(u8, module_uri, "pkl:base")) return self.builtinClass(name, info.args, context);
-                if (std.mem.eql(u8, module_uri, "pkl:ref")) return self.referenceClass(name, info.args, context);
+                if (std.mem.eql(u8, module_uri, "pkl:base")) return self.builtinClass(name, info.args, next_context);
+                if (std.mem.eql(u8, module_uri, "pkl:ref")) return self.referenceClass(name, info.args, next_context);
                 const module_index = self.by_uri.get(module_uri) orelse {
                     try self.fail(context.location, "module `{s}` was not described", .{module_uri});
                     return self.make(.dynamic);
@@ -740,7 +835,7 @@ const Planner = struct {
             .alias => {
                 const module_uri = info.module_uri orelse "";
                 const name = info.name orelse "";
-                if (std.mem.eql(u8, module_uri, "pkl:base")) return self.builtinAlias(name, context);
+                if (std.mem.eql(u8, module_uri, "pkl:base")) return self.builtinAlias(name, next_context);
                 const module_index = self.by_uri.get(module_uri) orelse {
                     try self.fail(context.location, "module `{s}` was not described", .{module_uri});
                     return self.make(.dynamic);
@@ -754,17 +849,17 @@ const Planner = struct {
                 const alias = &module.info.aliases[alias_index];
                 const env = try self.a.create(Env);
                 env.* = .{ .params = alias.params, .args = info.args, .parent = null, .args_env = context.env };
-                var inner = context;
+                var inner = next_context;
                 inner.env = env;
                 return self.resolve(alias.referent, inner);
             },
             .nullable => {
-                const inner = try self.resolve(if (info.args.len != 0) info.args[0] else unknown_type, context);
+                const inner = try self.resolve(if (info.args.len != 0) info.args[0] else unknown_type, next_context);
                 if (inner.* == .optional) return inner;
                 return self.make(.{ .optional = inner });
             },
-            .@"union" => return self.resolveUnion(info.args, context, null),
-            .literal => return self.resolveUnion(&.{info}, context, null),
+            .@"union" => return self.resolveUnion(info.args, next_context, null),
+            .literal => return self.resolveUnion(&.{info}, next_context, null),
             .function => {
                 try self.fail(context.location, "function types cannot be represented in Zig bindings", .{});
                 return self.make(.dynamic);
@@ -782,7 +877,7 @@ const Planner = struct {
                 while (step) |env| : (step = env.parent) {
                     for (env.params, 0..) |param, index| {
                         if (!std.mem.eql(u8, param, info.name orelse "")) continue;
-                        var inner = context;
+                        var inner = next_context;
                         inner.env = env.args_env;
                         return self.resolve(if (index < env.args.len) env.args[index] else unknown_type, inner);
                     }
@@ -924,8 +1019,6 @@ const Planner = struct {
             self.decls.items[decl].body = .{ .@"enum" = out };
         } else {
             const out = try self.a.alloc(Variant, members.items.len);
-            var seen: std.StringHashMapUnmanaged([]const u8) = .empty;
-            var overlapping: std.StringHashMapUnmanaged([]const u8) = .empty;
             for (members.items, out) |member, *slot| {
                 const label = try self.typeLabel(member);
                 if (member.kind == .literal) {
@@ -936,19 +1029,10 @@ const Planner = struct {
                 var inner = context;
                 inner.base = try std.fmt.allocPrint(self.a, "{s}{s}", .{ self.decls.items[decl].name, try names.pascalCase(self.a, label) });
                 const resolved = try self.resolve(member, inner);
-                const key = try self.typeKey(resolved, false);
-                const overlap_key = try self.typeKey(resolved, true);
-                if (seen.get(key)) |other| {
-                    try self.fail(context.location, "union members `{s}` and `{s}` decode to the same Zig type; Zig bindings cannot tell them apart", .{ other, label });
-                } else if (overlapping.get(overlap_key)) |other| {
-                    try self.fail(context.location, "union members `{s}` and `{s}` accept the same values; Zig bindings cannot tell them apart", .{ other, label });
-                } else {
-                    try seen.put(self.a, key, label);
-                    try overlapping.put(self.a, overlap_key, label);
-                }
                 slot.* = .{ .name = try self.uniqueMember(&used, try names.snakeCase(self.a, label), &union_reserved), .literal = null, .type = resolved, .label = label };
             }
             self.decls.items[decl].body = .{ .@"union" = out };
+            try self.unions.append(self.a, .{ .decl = decl, .location = context.location });
         }
         const reference = try self.make(.{ .decl = decl });
         if (target) |existing| {
@@ -1011,42 +1095,50 @@ const Planner = struct {
     }
 
     fn writeKey(self: *Planner, writer: *std.Io.Writer, item: *const Type, overlap: bool) std.Io.Writer.Error!void {
+        var visited = DeclSet{};
+        return self.writeKeyVisited(writer, item, overlap, &visited);
+    }
+
+    fn writeKeyVisited(self: *Planner, writer: *std.Io.Writer, item: *const Type, overlap: bool, visited: *DeclSet) std.Io.Writer.Error!void {
         switch (item.*) {
             .int => |name| try writer.writeAll(if (overlap) "int" else name),
             .reference => |pair| {
                 try writer.writeAll("ref(");
-                try self.writeKey(writer, pair[0], overlap);
+                try self.writeKeyVisited(writer, pair[0], overlap, visited);
                 try writer.writeByte(')');
             },
             .optional => |inner| {
                 try writer.writeByte('?');
-                try self.writeKey(writer, inner, overlap);
+                try self.writeKeyVisited(writer, inner, overlap, visited);
             },
             .slice => |inner| {
                 try writer.writeAll("[]");
-                try self.writeKey(writer, inner, overlap);
+                try self.writeKeyVisited(writer, inner, overlap, visited);
             },
             .boxed => |inner| {
                 try writer.writeByte('*');
-                try self.writeKey(writer, inner, overlap);
+                try self.writeKeyVisited(writer, inner, overlap, visited);
             },
             .map => |pair| {
                 try writer.writeAll("map(");
-                try self.writeKey(writer, pair[0], overlap);
+                try self.writeKeyVisited(writer, pair[0], overlap, visited);
                 try writer.writeByte(',');
-                try self.writeKey(writer, pair[1], overlap);
+                try self.writeKeyVisited(writer, pair[1], overlap, visited);
                 try writer.writeByte(')');
             },
             .pair => |pair| {
                 try writer.writeAll("pair(");
-                try self.writeKey(writer, pair[0], overlap);
+                try self.writeKeyVisited(writer, pair[0], overlap, visited);
                 try writer.writeByte(',');
-                try self.writeKey(writer, pair[1], overlap);
+                try self.writeKeyVisited(writer, pair[1], overlap, visited);
                 try writer.writeByte(')');
             },
             .decl => |decl| {
                 const body = self.decls.items[decl].body;
-                if (body == .alias) return self.writeKey(writer, body.alias, overlap);
+                if (body == .alias and visited.push(decl)) {
+                    defer visited.pop();
+                    return self.writeKeyVisited(writer, body.alias, overlap, visited);
+                }
                 try writer.print("#{d}", .{decl});
             },
             .raw => |text| try writer.print("raw({s})", .{text}),
@@ -1057,10 +1149,19 @@ const Planner = struct {
     // Defaults.
 
     fn isOptional(self: *Planner, item: *const Type) bool {
+        var visited = DeclSet{};
+        return self.isOptionalVisited(item, &visited);
+    }
+
+    fn isOptionalVisited(self: *Planner, item: *const Type, visited: *DeclSet) bool {
         return switch (item.*) {
             .optional => true,
             .decl => |decl| switch (self.decls.items[decl].body) {
-                .alias => |inner| self.isOptional(inner),
+                .alias => |inner| blk: {
+                    if (!visited.push(decl)) break :blk false;
+                    defer visited.pop();
+                    break :blk self.isOptionalVisited(inner, visited);
+                },
                 else => false,
             },
             else => false,
@@ -1070,16 +1171,26 @@ const Planner = struct {
     /// Zig source for `default` as a value of `item`, or `null` when it has
     /// no faithful Zig representation.
     fn defaultFor(self: *Planner, item: *const Type, default: ?schema.DefaultInfo) Error!?[]const u8 {
+        var visited = DeclSet{};
+        return self.defaultForVisited(item, default, &visited, 0);
+    }
+
+    fn defaultForVisited(self: *Planner, item: *const Type, default: ?schema.DefaultInfo, visited: *DeclSet, depth: u32) Error!?[]const u8 {
+        if (depth >= max_type_depth) return null;
         switch (item.*) {
             .optional => |inner| {
                 const found = default orelse return "null";
                 if (found.kind == .null) return "null";
-                return try self.defaultFor(inner, found);
+                return try self.defaultForVisited(inner, found, visited, depth + 1);
             },
             .decl => |decl| {
                 const found = default orelse return null;
                 switch (self.decls.items[decl].body) {
-                    .alias => |inner| return self.defaultFor(inner, found),
+                    .alias => |inner| {
+                        if (!visited.push(decl)) return null;
+                        defer visited.pop();
+                        return self.defaultForVisited(inner, found, visited, depth + 1);
+                    },
                     .@"enum" => |members| {
                         if (found.kind != .string) return null;
                         for (members) |member| {
@@ -1134,7 +1245,7 @@ const Planner = struct {
                 try out.appendSlice(self.a, "&.{");
                 for (found.items, 0..) |element, index| {
                     if (index != 0) try out.appendSlice(self.a, ", ");
-                    try out.appendSlice(self.a, try self.defaultFor(inner, element) orelse return null);
+                    try out.appendSlice(self.a, try self.defaultForVisited(inner, element, visited, depth + 1) orelse return null);
                 }
                 try out.append(self.a, '}');
                 return try out.toOwnedSlice(self.a);
@@ -1146,8 +1257,8 @@ const Planner = struct {
                 var index: usize = 0;
                 while (index < found.items.len) : (index += 2) {
                     if (index != 0) try out.appendSlice(self.a, ", ");
-                    const key = try self.defaultFor(pair[0], found.items[index]) orelse return null;
-                    const entry = try self.defaultFor(pair[1], found.items[index + 1]) orelse return null;
+                    const key = try self.defaultForVisited(pair[0], found.items[index], visited, depth + 1) orelse return null;
+                    const entry = try self.defaultForVisited(pair[1], found.items[index + 1], visited, depth + 1) orelse return null;
                     try out.print(self.a, ".{{ .key = {s}, .value = {s} }}", .{ key, entry });
                 }
                 try out.appendSlice(self.a, "} }");
@@ -1209,17 +1320,26 @@ const Planner = struct {
 
     /// Declarations stored by value in `item`. Type aliases are transparent.
     fn byValue(self: *Planner, out: *std.ArrayList(DeclId), item: *const Type) Error!void {
+        var visited = DeclSet{};
+        return self.byValueVisited(out, item, &visited);
+    }
+
+    fn byValueVisited(self: *Planner, out: *std.ArrayList(DeclId), item: *const Type, visited: *DeclSet) Error!void {
         switch (item.*) {
             .decl => |decl| switch (self.decls.items[decl].body) {
                 .@"enum" => {},
-                .alias => |inner| try self.byValue(out, inner),
+                .alias => |inner| {
+                    if (!visited.push(decl)) return;
+                    defer visited.pop();
+                    try self.byValueVisited(out, inner, visited);
+                },
                 else => try out.append(self.a, decl),
             },
-            .reference => |pair| try self.byValue(out, pair[0]),
-            .optional => |inner| try self.byValue(out, inner),
+            .reference => |pair| try self.byValueVisited(out, pair[0], visited),
+            .optional => |inner| try self.byValueVisited(out, inner, visited),
             .pair => |pair| {
-                try self.byValue(out, pair[0]);
-                try self.byValue(out, pair[1]);
+                try self.byValueVisited(out, pair[0], visited);
+                try self.byValueVisited(out, pair[1], visited);
             },
             else => {},
         }
@@ -1228,15 +1348,24 @@ const Planner = struct {
     /// Whether a use of a type alias with body `item` inside `owner` must be
     /// written out with pointers instead of by the alias name.
     fn aliasNeedsBox(self: *Planner, owner: DeclId, item: *const Type) bool {
+        var visited = DeclSet{};
+        return self.aliasNeedsBoxVisited(owner, item, &visited);
+    }
+
+    fn aliasNeedsBoxVisited(self: *Planner, owner: DeclId, item: *const Type, visited: *DeclSet) bool {
         return switch (item.*) {
             .decl => |id| switch (self.decls.items[id].body) {
-                .alias => |inner| self.aliasNeedsBox(owner, inner),
+                .alias => |inner| blk: {
+                    if (!visited.push(id)) break :blk false;
+                    defer visited.pop();
+                    break :blk self.aliasNeedsBoxVisited(owner, inner, visited);
+                },
                 .@"enum" => false,
                 else => self.mustBox(owner, id),
             },
-            .optional => |inner| self.aliasNeedsBox(owner, inner),
-            .pair => |pair| self.aliasNeedsBox(owner, pair[0]) or self.aliasNeedsBox(owner, pair[1]),
-            .reference => |pair| self.aliasNeedsBox(owner, pair[0]),
+            .optional => |inner| self.aliasNeedsBoxVisited(owner, inner, visited),
+            .pair => |pair| self.aliasNeedsBoxVisited(owner, pair[0], visited) or self.aliasNeedsBoxVisited(owner, pair[1], visited),
+            .reference => |pair| self.aliasNeedsBoxVisited(owner, pair[0], visited),
             else => false,
         };
     }
@@ -1281,29 +1410,37 @@ const Planner = struct {
 
     /// Records the modules that `writeType` refers to for `item`.
     fn noteRefs(self: *Planner, module_index: usize, owner: ?DeclId, by_value: bool, referenced: *std.AutoArrayHashMapUnmanaged(usize, void), item: *const Type) Error!void {
+        var visited = DeclSet{};
+        return self.noteRefsVisited(module_index, owner, by_value, referenced, item, &visited);
+    }
+
+    fn noteRefsVisited(self: *Planner, module_index: usize, owner: ?DeclId, by_value: bool, referenced: *std.AutoArrayHashMapUnmanaged(usize, void), item: *const Type, visited: *DeclSet) Error!void {
         switch (item.*) {
             .decl => |decl| {
                 const target = self.decls.items[decl];
                 if (owner != null and by_value and target.body == .alias and self.aliasNeedsBox(owner.?, target.body.alias)) {
-                    return self.noteRefs(module_index, owner, true, referenced, target.body.alias);
+                    if (visited.push(decl)) {
+                        defer visited.pop();
+                        return self.noteRefsVisited(module_index, owner, true, referenced, target.body.alias, visited);
+                    }
                 }
                 if (target.module != module_index) {
                     try referenced.put(self.a, target.module, {});
                 } else if (target.is_module) self.modules.items[module_index].uses_self = true;
             },
-            .optional => |inner| try self.noteRefs(module_index, owner, by_value, referenced, inner),
-            .slice, .boxed => |inner| try self.noteRefs(module_index, owner, false, referenced, inner),
+            .optional => |inner| try self.noteRefsVisited(module_index, owner, by_value, referenced, inner, visited),
+            .slice, .boxed => |inner| try self.noteRefsVisited(module_index, owner, false, referenced, inner, visited),
             .map => |pair| {
-                try self.noteRefs(module_index, owner, false, referenced, pair[0]);
-                try self.noteRefs(module_index, owner, false, referenced, pair[1]);
+                try self.noteRefsVisited(module_index, owner, false, referenced, pair[0], visited);
+                try self.noteRefsVisited(module_index, owner, false, referenced, pair[1], visited);
             },
             .pair => |pair| {
-                try self.noteRefs(module_index, owner, by_value, referenced, pair[0]);
-                try self.noteRefs(module_index, owner, by_value, referenced, pair[1]);
+                try self.noteRefsVisited(module_index, owner, by_value, referenced, pair[0], visited);
+                try self.noteRefsVisited(module_index, owner, by_value, referenced, pair[1], visited);
             },
             .reference => |pair| {
-                try self.noteRefs(module_index, owner, by_value, referenced, pair[0]);
-                try self.noteRefs(module_index, owner, false, referenced, pair[1]);
+                try self.noteRefsVisited(module_index, owner, by_value, referenced, pair[0], visited);
+                try self.noteRefsVisited(module_index, owner, false, referenced, pair[1], visited);
             },
             else => {},
         }
@@ -1329,13 +1466,17 @@ const Planner = struct {
     }
 
     fn canonical(self: *Planner, text: []const u8, path: []const u8) Error![]const u8 {
-        const source = try self.a.dupeSentinel(u8, text, 0);
-        var tree = try std.zig.Ast.parse(self.a, source, .{});
+        var scratch = std.heap.ArenaAllocator.init(self.gpa);
+        defer scratch.deinit();
+        const temp = scratch.allocator();
+        const source = try temp.dupeSentinel(u8, text, 0);
+        var tree = try std.zig.Ast.parse(temp, source, .{});
         if (tree.errors.len != 0) {
             try self.fail(null, "internal error: generated `{s}` does not parse", .{path});
             return text;
         }
-        return tree.renderAlloc(self.a);
+        const formatted = try tree.renderAlloc(temp);
+        return self.a.dupe(u8, formatted);
     }
 
     fn renderModule(self: *Planner, module_index: usize) Error![]const u8 {
@@ -1473,13 +1614,22 @@ const Planner = struct {
     /// Whether `writeType` stores the outermost value of `item` behind a
     /// pointer inside `owner`.
     fn boxesValue(self: *Planner, owner: DeclId, item: *const Type) bool {
+        var visited = DeclSet{};
+        return self.boxesValueVisited(owner, item, &visited);
+    }
+
+    fn boxesValueVisited(self: *Planner, owner: DeclId, item: *const Type, visited: *DeclSet) bool {
         return switch (item.*) {
             .decl => |id| switch (self.decls.items[id].body) {
-                .alias => |inner| self.aliasNeedsBox(owner, inner) and self.boxesValue(owner, inner),
+                .alias => |inner| blk: {
+                    if (!visited.push(id)) break :blk false;
+                    defer visited.pop();
+                    break :blk self.aliasNeedsBox(owner, inner) and self.boxesValueVisited(owner, inner, visited);
+                },
                 .@"enum" => false,
                 else => self.mustBox(owner, id),
             },
-            .optional => |inner| self.boxesValue(owner, inner),
+            .optional => |inner| self.boxesValueVisited(owner, inner, visited),
             else => false,
         };
     }
@@ -1509,6 +1659,11 @@ const Planner = struct {
     }
 
     fn writeType(self: *Planner, w: *std.Io.Writer, item: *const Type, module_index: usize, owner: ?DeclId, by_value: bool) (std.Io.Writer.Error || Error)!void {
+        var visited = DeclSet{};
+        return self.writeTypeVisited(w, item, module_index, owner, by_value, &visited);
+    }
+
+    fn writeTypeVisited(self: *Planner, w: *std.Io.Writer, item: *const Type, module_index: usize, owner: ?DeclId, by_value: bool, visited: *DeclSet) (std.Io.Writer.Error || Error)!void {
         switch (item.*) {
             .bool => try w.writeAll("bool"),
             .int => |name| try w.writeAll(name),
@@ -1524,40 +1679,43 @@ const Planner = struct {
             .access => try w.writeAll("zig_pkl.convert.Access"),
             .reference => |pair| {
                 try w.writeAll("zig_pkl.convert.Reference(");
-                try self.writeType(w, pair[0], module_index, owner, by_value);
+                try self.writeTypeVisited(w, pair[0], module_index, owner, by_value, visited);
                 try w.writeAll(", ");
-                try self.writeType(w, pair[1], module_index, owner, false);
+                try self.writeTypeVisited(w, pair[1], module_index, owner, false, visited);
                 try w.writeByte(')');
             },
             .optional => |inner| {
                 try w.writeByte('?');
-                try self.writeType(w, inner, module_index, owner, by_value);
+                try self.writeTypeVisited(w, inner, module_index, owner, by_value, visited);
             },
             .slice => |inner| {
                 try w.writeAll("[]const ");
-                try self.writeType(w, inner, module_index, owner, false);
+                try self.writeTypeVisited(w, inner, module_index, owner, false, visited);
             },
             .boxed => |inner| {
                 try w.writeAll("*const ");
-                try self.writeType(w, inner, module_index, owner, false);
+                try self.writeTypeVisited(w, inner, module_index, owner, false, visited);
             },
             .map => |pair| {
                 try w.writeAll("zig_pkl.convert.Map(");
-                try self.writeType(w, pair[0], module_index, owner, false);
+                try self.writeTypeVisited(w, pair[0], module_index, owner, false, visited);
                 try w.writeAll(", ");
-                try self.writeType(w, pair[1], module_index, owner, false);
+                try self.writeTypeVisited(w, pair[1], module_index, owner, false, visited);
                 try w.writeByte(')');
             },
             .pair => |pair| {
                 try w.writeAll("zig_pkl.convert.Pair(");
-                try self.writeType(w, pair[0], module_index, owner, by_value);
+                try self.writeTypeVisited(w, pair[0], module_index, owner, by_value, visited);
                 try w.writeAll(", ");
-                try self.writeType(w, pair[1], module_index, owner, by_value);
+                try self.writeTypeVisited(w, pair[1], module_index, owner, by_value, visited);
                 try w.writeByte(')');
             },
             .decl => |id| {
                 if (owner) |container| if (by_value) switch (self.decls.items[id].body) {
-                    .alias => |inner| if (self.aliasNeedsBox(container, inner)) return self.writeType(w, inner, module_index, owner, true),
+                    .alias => |inner| if (self.aliasNeedsBox(container, inner) and visited.push(id)) {
+                        defer visited.pop();
+                        return self.writeTypeVisited(w, inner, module_index, owner, true, visited);
+                    },
                     else => if (self.mustBox(container, id)) try w.writeAll("*const "),
                 };
                 try self.writeReference(w, id, module_index);
@@ -1760,10 +1918,6 @@ fn rawTypeProblem(a: Allocator, text: []const u8) error{OutOfMemory}!?[]const u8
             .call_one_comma,
             .call,
             .call_comma,
-            .builtin_call_two,
-            .builtin_call_two_comma,
-            .builtin_call,
-            .builtin_call_comma,
             .grouped_expression,
             .number_literal,
             .char_literal,
@@ -1784,7 +1938,29 @@ fn rawTypeProblem(a: Allocator, text: []const u8) error{OutOfMemory}!?[]const u8
             .container_field_init,
             .container_field_align,
             .container_field,
-            => {},
+            => {
+                if (tree.fullContainerField(node)) |cf| {
+                    if (cf.ast.value_expr.unwrap()) |val| {
+                        const first = tree.firstToken(val);
+                        const last = tree.lastToken(val);
+                        for (1..tree.nodes.len) |child_idx| {
+                            const child: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(child_idx));
+                            if (tree.firstToken(child) < first or tree.lastToken(child) > last) continue;
+                            switch (tree.nodeTag(child)) {
+                                .identifier,
+                                .field_access,
+                                .grouped_expression,
+                                .number_literal,
+                                .char_literal,
+                                .string_literal,
+                                .enum_literal,
+                                => {},
+                                else => return "it contains a disallowed container field default expression",
+                            }
+                        }
+                    }
+                }
+            },
             else => return "it contains declarations, blocks, or expressions that are not types",
         }
     }

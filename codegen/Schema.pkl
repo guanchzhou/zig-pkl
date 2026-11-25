@@ -103,10 +103,13 @@ function describedUris(targets: List<Module>): List<String> =
 /// declares its class.
 function describe(targets: List<Module>): Description =
   let (effective = targets.map((target) -> reflect.Module(target).moduleClass.enclosingDeclaration))
-    new Description {
-      roots = effective.map((it) -> it.uri).distinct
-      modules = closure(Map(), effective).values.map((it) -> moduleInfo(it))
-    }
+    let (modulesMap = closure(Map(), effective))
+      let (sources = modulesMap.mapValues((_, m) -> moduleSource(m)))
+        let (platformModules = platformClosure(modulesMap, sources))
+          new Description {
+            roots = effective.map((it) -> it.uri).distinct
+            modules = modulesMap.values.map((it) -> moduleInfo(it, sources[it.uri], platformModules.contains(it.uri)))
+          }
 
 local function closure(seen: Map<String, reflect.Module>, queue: List<reflect.Module>): Map<String, reflect.Module> =
   if (queue.isEmpty) seen
@@ -178,25 +181,26 @@ local function typeModules(t: reflect.Type): List<reflect.Module> =
   else if (t is reflect.UnionType) t.members.flatMap((it) -> typeModules(it))
   else List()
 
-local function moduleInfo(m: reflect.Module): ModuleInfo =
+local function moduleInfo(m: reflect.Module, source: String, moduleMentionsPlatform: Boolean): ModuleInfo =
   let (moduleClasses = allClasses(m))
     let (moduleAliases = allAliases(m))
-      new {
-        uri = m.uri
-        name = m.name
-        package_name = annotationValue(m, "Package", "name")
-        zig_name = annotationValue(m, "Name", "value")
-        location = locationOf(m)
-        doc = m.docComment
-        module_class = classInfo(m.moduleClass)
-        classes = moduleClasses.map((it) -> classInfo(it))
-        aliases = moduleAliases.map((it) -> aliasInfo(it))
-        foreign_annotations = (List(m) + moduleClasses + moduleAliases
-          + (List(m.moduleClass) + moduleClasses).flatMap((c) -> c.properties.values))
-          .flatMap((d) -> foreignAnnotations(d))
-      }
+      let (lines = source.split("\n"))
+        new {
+          uri = m.uri
+          name = m.name
+          package_name = annotationValue(m, "Package", "name")
+          zig_name = annotationValue(m, "Name", "value")
+          location = locationOf(m)
+          doc = m.docComment
+          module_class = classInfo(m.moduleClass, source, lines, moduleMentionsPlatform)
+          classes = moduleClasses.map((it) -> classInfo(it, source, lines, moduleMentionsPlatform))
+          aliases = moduleAliases.map((it) -> aliasInfo(it))
+          foreign_annotations = (List(m) + moduleClasses + moduleAliases
+            + (List(m.moduleClass) + moduleClasses).flatMap((c) -> c.properties.values))
+            .flatMap((d) -> foreignAnnotations(d))
+        }
 
-local function classInfo(c: reflect.Class): ClassInfo = new {
+local function classInfo(c: reflect.Class, source: String, lines: List<String>, moduleMentionsPlatform: Boolean): ClassInfo = new {
   name = c.name
   zig_name = annotationValue(c, "Name", "value")
   location = locationOf(c)
@@ -204,7 +208,7 @@ local function classInfo(c: reflect.Class): ClassInfo = new {
   is_abstract = c.modifiers.contains("abstract")
   is_open = c.modifiers.contains("open")
   superclass = classRef(c.superclass)
-  properties = c.properties.values.filter((p) -> !p.allModifiers.contains("hidden")).map((it) -> propertyInfo(it, c.enclosingDeclaration))
+  properties = c.properties.values.filter((p) -> !p.allModifiers.contains("hidden")).map((it) -> propertyInfo(it, c.enclosingDeclaration, source, lines, moduleMentionsPlatform))
 }
 
 local function classRef(c: reflect.Class?): ClassRef? =
@@ -216,7 +220,7 @@ local function classRef(c: reflect.Class?): ClassRef? =
 
 local function isModuleClass(c: reflect.Class): Boolean = c.reflectee == c.enclosingDeclaration.moduleClass.reflectee
 
-local function propertyInfo(p: reflect.Property, owner: reflect.Module): PropertyInfo = new {
+local function propertyInfo(p: reflect.Property, owner: reflect.Module, source: String, lines: List<String>, moduleMentionsPlatform: Boolean): PropertyInfo = new {
   name = p.name
   zig_name = annotationValue(p, "Name", "value")
   location = locationOf(p)
@@ -224,7 +228,7 @@ local function propertyInfo(p: reflect.Property, owner: reflect.Module): Propert
   type = typeInfo(p.type)
   boxed = annotationValue(p, "Field", "boxed") == true
   zig_type = annotationValue(p, "Field", "type")
-  default = defaultInfo(p, owner)
+  default = defaultInfo(p, owner, source, lines, moduleMentionsPlatform)
 }
 
 local function aliasInfo(a: reflect.TypeAlias): AliasInfo = new {
@@ -236,8 +240,8 @@ local function aliasInfo(a: reflect.TypeAlias): AliasInfo = new {
   referent = typeInfo(a.referent)
 }
 
-local function defaultInfo(p: reflect.Property, owner: reflect.Module): DefaultInfo? =
-  if (referencesPlatform(p, owner)) failedDefault
+local function defaultInfo(p: reflect.Property, owner: reflect.Module, source: String, lines: List<String>, moduleMentionsPlatform: Boolean): DefaultInfo? =
+  if (referencesPlatform(p, owner, source, lines, moduleMentionsPlatform)) failedDefault
   else if (test.catchOrNull(() -> p.defaultValue) != null) failedDefault
   else if (p.defaultValue == null) null
   else if (test.catchOrNull(() -> new PcfRenderer {}.renderValue(valueInfo(p.defaultValue))) != null) failedDefault
@@ -247,24 +251,25 @@ local failedDefault: DefaultInfo = new { kind = "failed" }
 
 /// `pkl:platform` is part of the standard library, so the module allowlist
 /// cannot block it. A default that names it, and any non-literal default in
-/// a module that imports it, would copy the host into the bindings.
+/// a module that imports it (directly or transitively), would copy the host
+/// into the bindings.
 ///
 /// A module whose source cannot be read is treated as if every default named
 /// `pkl:platform`, so a skipped check never copies a host value.
-local function referencesPlatform(p: reflect.Property, owner: reflect.Module): Boolean =
-  let (source = moduleSource(owner))
-    let (text = declarationText(source, p.location.line))
-      source.isEmpty
-        || amendsPlatform(owner)
-        || text.contains("pkl:platform")
-        || opaqueImport(text)
-        || (mentionsPlatform(owner, source) && !plainLiteral(text))
+local function referencesPlatform(p: reflect.Property, owner: reflect.Module, source: String, lines: List<String>, moduleMentionsPlatform: Boolean): Boolean =
+  let (text = declarationText(lines, p.location.line))
+    source.isEmpty
+      || amendsPlatform(owner)
+      || text.contains("pkl:platform")
+      || opaqueImport(text)
+      || (moduleMentionsPlatform && !plainLiteral(text))
 
-/// An `import(...)` expression whose argument is not a plain string, or
-/// whose string contains an escape, could name `pkl:platform` in a form the
-/// text match does not see.
+/// An `import(...)` expression or header `import`/`amends`/`extends` whose
+/// argument is not a plain single-line string literal without escapes could
+/// name `pkl:platform` in a form the text match does not see.
 local function opaqueImport(text: String): Boolean =
-  text.contains(Regex(#"\bimport\*?\s*\(\s*(?:[^"\s]|"[^"]*\\)"#))
+  text.contains(Regex(#"\bimport\*?(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*\((?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*(?:"""|[^"\s]|"[^"\n]*\\)"#))
+    || text.contains(Regex(#"\b(?:import\*?|amends|extends)(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)+(?:"""|#|"(?:[^"\n]*\\))"#))
 
 /// `catchOrNull` returns null when the function succeeds and the thrown value
 /// when it fails. A denied read leaves the source empty.
@@ -276,7 +281,26 @@ local function amendsPlatform(m: reflect.Module): Boolean =
   m.supermodule != null && m.supermodule.uri.startsWith("pkl:platform")
 
 local function mentionsPlatform(m: reflect.Module, source: String): Boolean =
-  source.contains("pkl:platform") || opaqueImport(source) || (test.catchOrNull(() -> m.imports) == null && m.imports.keys.any((name) -> m.imports[name].startsWith("pkl:platform")))
+  source.isEmpty
+    || amendsPlatform(m)
+    || source.contains("pkl:platform")
+    || opaqueImport(source)
+    || (test.catchOrNull(() -> m.imports) == null && m.imports.keys.any((name) -> m.imports[name].startsWith("pkl:platform")))
+
+local function platformClosure(modulesMap: Map<String, reflect.Module>, sources: Map<String, String>): Set<String> =
+  let (initial = modulesMap.keys.filter((uri) -> mentionsPlatform(modulesMap[uri], sources[uri])).toSet())
+    propagatePlatform(modulesMap, initial)
+
+local function propagatePlatform(modulesMap: Map<String, reflect.Module>, dirty: Set<String>): Set<String> =
+  let (added = modulesMap.keys.filter((uri) ->
+    !dirty.contains(uri) && dependsOnPlatform(modulesMap[uri], dirty)
+  ).toSet())
+    if (added.isEmpty) dirty
+    else propagatePlatform(modulesMap, dirty + added)
+
+local function dependsOnPlatform(m: reflect.Module, dirty: Set<String>): Boolean =
+  (m.supermodule != null && dirty.contains(m.supermodule.uri))
+    || (test.catchOrNull(() -> m.imports) == null && m.imports.keys.any((name) -> dirty.contains(m.imports[name])))
 
 /// The value is a literal scalar, so it cannot observe the host. Anything
 /// else in a module that mentions `pkl:platform` is left unevaluated, which
@@ -298,15 +322,14 @@ local function assignmentIndex(text: String, index: Int, depth: Int, inString: B
   else if (text[index] == "=" && depth == 0) index
   else assignmentIndex(text, index + 1, depth, false)
 
-local function declarationText(source: String, lineNumber: Int): String =
-  let (lines = source.split("\n"))
-    let (index = lineNumber - 1)
-      if (index < 0 || index >= lines.length) ""
-      else
-        let (first = lines[index])
-          let (indent = indentation(first))
-            let (rest = lines.drop(index + 1).takeWhile((line) -> continuation(line, indent)))
-              (List(first) + rest).join("\n")
+local function declarationText(lines: List<String>, lineNumber: Int): String =
+  let (index = lineNumber - 1)
+    if (index < 0 || index >= lines.length) ""
+    else
+      let (first = lines[index])
+        let (indent = indentation(first))
+          let (rest = lines.drop(index + 1).takeWhile((line) -> continuation(line, indent)))
+            (List(first) + rest).join("\n")
 
 local function indentation(line: String): Int = line.takeWhile((char) -> char == " " || char == "\t").length
 

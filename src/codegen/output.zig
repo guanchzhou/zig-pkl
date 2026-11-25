@@ -72,11 +72,8 @@ const Manifest = struct {
 fn readManifest(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, output_dir: []const u8, mode: Mode, diagnostics: *Diagnostics) !Manifest {
     var manifest = Manifest{};
     errdefer manifest.deinit(allocator);
-    manifest.text = dir.readFileAlloc(io, manifest_name, allocator, .limited(max_file_bytes)) catch |err| switch (err) {
-        error.FileNotFound => return manifest,
-        else => return err,
-    };
-    const text = manifest.text.?;
+    manifest.text = try readExisting(allocator, io, dir, manifest_name);
+    const text = manifest.text orelse return manifest;
     const location = try std.fs.path.join(allocator, &.{ output_dir, manifest_name });
     defer allocator.free(location);
     if (!std.mem.startsWith(u8, text, manifest_header)) {
@@ -130,11 +127,98 @@ fn renderManifest(allocator: std.mem.Allocator, files: []const File) error{OutOf
     return out.toOwnedSlice() catch return error.OutOfMemory;
 }
 
+const OpenedDir = struct {
+    dir: std.Io.Dir,
+    owned: bool,
+};
+
+var temp_counter: std.atomic.Value(u64) = .init(1);
+
+fn openDirNoSymlinks(io: std.Io, root: std.Io.Dir, relative: []const u8, create: bool) !OpenedDir {
+    var current = root;
+    var owned = false;
+    errdefer if (owned) current.close(io);
+    var parts = std.mem.splitScalar(u8, relative, '/');
+    while (parts.next()) |part| {
+        if (part.len == 0) continue;
+        if (create) {
+            current.createDir(io, part, .default_dir) catch |err| switch (err) {
+                error.PathAlreadyExists => {},
+                else => return err,
+            };
+        }
+        const next = try current.openDir(io, part, .{ .follow_symlinks = false });
+        if (owned) current.close(io);
+        current = next;
+        owned = true;
+    }
+    return .{ .dir = current, .owned = owned };
+}
+
+fn splitParent(path: []const u8) struct { parent: []const u8, name: []const u8 } {
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
+        return .{ .parent = path[0..slash], .name = path[slash + 1 ..] };
+    }
+    return .{ .parent = "", .name = path };
+}
+
 fn readExisting(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !?[]u8 {
-    return dir.readFileAlloc(io, path, allocator, .limited(max_file_bytes)) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => err,
+    const parts = splitParent(path);
+    var parent = openDirNoSymlinks(io, dir, parts.parent, false) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
     };
+    defer if (parent.owned) parent.dir.close(io);
+    const file = parent.dir.openFile(io, parts.name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &buf);
+    return try reader.interface.allocRemaining(allocator, .limited(max_file_bytes));
+}
+
+fn writeFileAtomic(io: std.Io, dir: std.Io.Dir, path: []const u8, data: []const u8) !void {
+    const parts = splitParent(path);
+    var parent = try openDirNoSymlinks(io, dir, parts.parent, true);
+    defer if (parent.owned) parent.dir.close(io);
+    if (parent.dir.statFile(io, parts.name, .{ .follow_symlinks = false })) |st| {
+        if (st.kind == .sym_link) return error.SymLinkLoop;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+    var name_buf: [64]u8 = undefined;
+    var attempts: usize = 0;
+    while (attempts < 64) : (attempts += 1) {
+        const seq = temp_counter.fetchAdd(1, .monotonic);
+        const tmp_name = std.fmt.bufPrint(&name_buf, ".zig-pkl-tmp-{x}", .{seq}) catch unreachable;
+        const file = parent.dir.createFile(io, tmp_name, .{ .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => continue,
+            else => return err,
+        };
+        errdefer parent.dir.deleteFile(io, tmp_name) catch {};
+        {
+            defer file.close(io);
+            var buf: [4096]u8 = undefined;
+            var writer = file.writer(io, &buf);
+            try writer.interface.writeAll(data);
+            try writer.interface.flush();
+        }
+        try parent.dir.rename(tmp_name, parent.dir, parts.name, io);
+        return;
+    }
+    return error.PathAlreadyExists;
+}
+
+fn deleteFileNoSymlinks(io: std.Io, dir: std.Io.Dir, path: []const u8) !void {
+    const parts = splitParent(path);
+    var parent = try openDirNoSymlinks(io, dir, parts.parent, false);
+    defer if (parent.owned) parent.dir.close(io);
+    const st = try parent.dir.statFile(io, parts.name, .{ .follow_symlinks = false });
+    if (st.kind == .sym_link) return error.SymLinkLoop;
+    try parent.dir.deleteFile(io, parts.name);
 }
 
 /// Brings `output_dir` up to date with `files`, whose paths must satisfy
@@ -148,6 +232,12 @@ pub fn writeFiles(
     mode: Mode,
     diagnostics: *Diagnostics,
 ) !Report {
+    for (files) |file| {
+        if (!isSafePath(file.path)) {
+            try diagnostics.add(file.path, "output path `{s}` is not a normalized relative path", .{file.path});
+            return error.CodegenFailed;
+        }
+    }
     var report = Report{};
     const cwd = std.Io.Dir.cwd();
     var dir = cwd.openDir(io, output_dir, .{}) catch |err| switch (err) {
@@ -172,7 +262,6 @@ pub fn writeFiles(
     defer allocator.free(writes);
     var conflicts: usize = 0;
     for (files, writes) |file, *write| {
-        std.debug.assert(isSafePath(file.path));
         try planned.put(allocator, file.path, {});
         const existing = try readExisting(allocator, io, dir, file.path);
         defer if (existing) |bytes| allocator.free(bytes);
@@ -216,8 +305,7 @@ pub fn writeFiles(
         } else if (mode.check) {
             report.outdated += 1;
         } else {
-            if (std.fs.path.dirnamePosix(file.path)) |parent| try dir.createDirPath(io, parent);
-            try dir.writeFile(io, .{ .sub_path = file.path, .data = file.contents });
+            try writeFileAtomic(io, dir, file.path, file.contents);
             report.written += 1;
         }
     }
@@ -225,14 +313,14 @@ pub fn writeFiles(
         if (mode.check) {
             report.outdated += 1;
         } else {
-            try dir.deleteFile(io, path);
+            try deleteFileNoSymlinks(io, dir, path);
             report.removed += 1;
         }
     }
     if (!manifest_current) {
         if (mode.check) {
             report.outdated += 1;
-        } else try dir.writeFile(io, .{ .sub_path = manifest_name, .data = manifest_text });
+        } else try writeFileAtomic(io, dir, manifest_name, manifest_text);
     }
     return report;
 }
@@ -366,4 +454,32 @@ test "manifest entries cannot reach outside the output directory" {
 
     try std.testing.expectEqual(Report{ .written = 1 }, try scratch.write(&files, .{ .force = true }, &diagnostics));
     try scratch.expectContents("outside.zig", "keep\n");
+}
+
+test "writeFiles enforces safe paths at runtime and refuses symlinks" {
+    var scratch = try Scratch.init("out");
+    defer scratch.deinit();
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+
+    const unsafe = [_]File{.{ .path = "../escape.zig", .contents = "bad\n" }};
+    try std.testing.expectError(error.CodegenFailed, scratch.write(&unsafe, .{}, &diagnostics));
+    try std.testing.expect(diagnostics.contains("is not a normalized relative path"));
+
+    if (@import("builtin").os.tag == .windows) return;
+    const io = std.testing.io;
+    try scratch.tmp.dir.createDirPath(io, "out");
+    try scratch.tmp.dir.writeFile(io, .{ .sub_path = "outside.zig", .data = "keep\n" });
+    try scratch.tmp.dir.symLink(io, "../outside.zig", "out/link.zig", .{});
+
+    const over_link = [_]File{.{ .path = "link.zig", .contents = "clobber\n" }};
+    try std.testing.expectError(error.SymLinkLoop, scratch.write(&over_link, .{ .force = true }, &diagnostics));
+    try scratch.expectContents("outside.zig", "keep\n");
+
+    try scratch.tmp.dir.createDirPath(io, "outside_dir");
+    try scratch.tmp.dir.symLink(io, "../outside_dir", "out/sub", .{ .is_directory = true });
+    const under_link = [_]File{.{ .path = "sub/a.zig", .contents = "clobber\n" }};
+    const sub_res = scratch.write(&under_link, .{ .force = true }, &diagnostics);
+    try std.testing.expect(std.meta.isError(sub_res));
+    try std.testing.expectError(error.FileNotFound, scratch.tmp.dir.statFile(io, "outside_dir/a.zig", .{}));
 }
