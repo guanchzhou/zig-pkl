@@ -71,7 +71,7 @@ pub fn load(
     lock_json: ?[]const u8,
 ) !Owned {
     var failure: ?[]u8 = null;
-    defer if (failure) |text| allocator.free(text);
+    defer if (failure) |text| evaluator.manager.allocator.free(text);
     var evaluated = try evaluator.evaluateSource(source.Source.uri(project_uri), project_expression, &failure);
     defer evaluated.deinit();
     const parts = switch (evaluated.root.*) {
@@ -197,16 +197,38 @@ fn projectDirectory(allocator: std.mem.Allocator, project_uri: []const u8, rules
     }
     if (std.mem.indexOfAny(u8, rest, "?#")) |end| rest = rest[0..end];
     const directory = rest[0 .. (std.mem.lastIndexOfScalar(u8, rest, '/') orelse return error.InvalidProject) + 1];
-    const path = std.Uri.percentDecodeInPlace(try allocator.dupe(u8, directory));
+    const path = try decodePercentPath(allocator, directory);
     switch (rules) {
         .posix => return path,
         .windows => {
-            const local = if (path.len >= 4 and path[0] == '/' and std.ascii.isUpper(path[1]) and path[2] == ':' and path[3] == '/') path[1..] else path;
+            const local = if (path.len >= 4 and path[0] == '/' and std.ascii.isAlphabetic(path[1]) and path[2] == ':' and path[3] == '/') path[1..] else path;
             const converted = if (host.len != 0) try std.mem.concat(allocator, u8, &.{ "//", host, local }) else local;
             std.mem.replaceScalar(u8, converted, '/', '\\');
             return converted;
         },
     }
+}
+
+fn decodePercentPath(allocator: std.mem.Allocator, raw: []const u8) Error![]u8 {
+    if (std.mem.indexOfScalar(u8, raw, 0) != null) return error.InvalidProject;
+    const out = try allocator.alloc(u8, raw.len);
+    errdefer allocator.free(out);
+    var len: usize = 0;
+    var index: usize = 0;
+    while (index < raw.len) : (index += 1) {
+        var byte = raw[index];
+        if (byte == '%') {
+            if (index + 2 >= raw.len) return error.InvalidProject;
+            const high = std.fmt.charToDigit(raw[index + 1], 16) catch return error.InvalidProject;
+            const low = std.fmt.charToDigit(raw[index + 2], 16) catch return error.InvalidProject;
+            byte = high * 16 + low;
+            if (byte == 0) return error.InvalidProject;
+            index += 2;
+        }
+        out[len] = byte;
+        len += 1;
+    }
+    return out[0..len];
 }
 
 fn resolvePath(allocator: std.mem.Allocator, base: []const u8, path: []const u8, rules: PathRules) Error![]const u8 {
@@ -753,6 +775,16 @@ test "project paths resolve against the project directory like Pkl's windows res
     for (cases) |case| try std.testing.expectEqualStrings(case[1], try resolvePath(allocator, base, case[0], .windows));
     const unc = try projectDirectory(allocator, "file://server/share/app/PklProject", .windows);
     try std.testing.expectEqualStrings("\\\\server\\share\\app\\", unc);
+    const lower_drive = try projectDirectory(allocator, "file:///c:/work/app/PklProject", .windows);
+    try std.testing.expectEqualStrings("c:\\work\\app\\", lower_drive);
+    for ([_][]const u8{
+        "file:///work/a%00b/PklProject",
+        "file:///work/a%2/PklProject",
+        "file:///work/a%zz/PklProject",
+        "file:///work/a\x00b/PklProject",
+    }) |bad| {
+        try std.testing.expectError(error.InvalidProject, projectDirectory(allocator, bad, .posix));
+    }
 }
 
 test "reader executables resolve only when they name a path" {

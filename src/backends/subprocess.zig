@@ -208,8 +208,8 @@ pub const Subprocess = struct {
         return true;
     }
 
-    /// Signals processes the server left in its group. `CONT` probes whether
-    /// any member remains without disturbing running processes.
+    /// Signals processes the server left in its group. Signal 0 probes whether
+    /// any member remains without disturbing running or stopped processes.
     fn terminateGroupRemnants(self: *Subprocess) void {
         if (comptime !posix_process_groups) return;
         const group = self.group orelse return;
@@ -219,7 +219,7 @@ pub const Subprocess = struct {
         const deadline = std.Io.Clock.awake.now(self.io).addDuration(.fromMilliseconds(self.options.kill_timeout_ms));
         while (deadline.untilNow(self.io, .awake).nanoseconds < 0) {
             self.io.sleep(.fromMilliseconds(5), .awake) catch {};
-            std.posix.kill(-group, .CONT) catch return;
+            std.posix.kill(-group, @fromBackingInt(@intCast(0))) catch return;
         }
         std.posix.kill(-group, .KILL) catch {};
     }

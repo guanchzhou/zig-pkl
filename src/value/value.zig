@@ -523,10 +523,16 @@ fn readContainer(cursor: *msgpack.Decoder) Error!Value {
 
 fn readMembers(cursor: *msgpack.Decoder) Error![]Member {
     const len = try cursor.readArrayLength();
-    try cursor.reserveCollection(len, @sizeOf(Member), 1);
-    const items = try cursor.allocator.alloc(Member, len);
-    for (items) |*item| item.* = try readMember(cursor);
-    return items;
+    try cursor.reserveCollection(len, @sizeOf(Member), 4);
+    var items: std.ArrayList(Member) = .empty;
+    errdefer items.deinit(cursor.allocator);
+    const initial = cursor.initialCapacity(len, 4);
+    if (initial != 0) try items.ensureTotalCapacity(cursor.allocator, initial);
+    var index: u32 = 0;
+    while (index < len) : (index += 1) {
+        try items.append(cursor.allocator, try readMember(cursor));
+    }
+    return items.toOwnedSlice(cursor.allocator);
 }
 
 fn readMember(cursor: *msgpack.Decoder) Error!Member {
@@ -562,22 +568,32 @@ fn readMember(cursor: *msgpack.Decoder) Error!Member {
 fn readEntries(cursor: *msgpack.Decoder) Error![]Entry {
     const len = try cursor.readMapLength();
     try cursor.reserveCollection(len, @sizeOf(Entry), 2);
-    const items = try cursor.allocator.alloc(Entry, len);
-    for (items) |*item| {
-        item.* = .{
+    var items: std.ArrayList(Entry) = .empty;
+    errdefer items.deinit(cursor.allocator);
+    const initial = cursor.initialCapacity(len, 2);
+    if (initial != 0) try items.ensureTotalCapacity(cursor.allocator, initial);
+    var index: u32 = 0;
+    while (index < len) : (index += 1) {
+        try items.append(cursor.allocator, .{
             .key = try allocValue(cursor, try readValue(cursor)),
             .value = try allocValue(cursor, try readValue(cursor)),
-        };
+        });
     }
-    return items;
+    return items.toOwnedSlice(cursor.allocator);
 }
 
 fn readSequence(cursor: *msgpack.Decoder) Error![]*Value {
     const len = try cursor.readArrayLength();
     try cursor.reserveCollection(len, @sizeOf(*Value), 1);
-    const items = try cursor.allocator.alloc(*Value, len);
-    for (items) |*item| item.* = try allocValue(cursor, try readValue(cursor));
-    return items;
+    var items: std.ArrayList(*Value) = .empty;
+    errdefer items.deinit(cursor.allocator);
+    const initial = cursor.initialCapacity(len, 1);
+    if (initial != 0) try items.ensureTotalCapacity(cursor.allocator, initial);
+    var index: u32 = 0;
+    while (index < len) : (index += 1) {
+        try items.append(cursor.allocator, try allocValue(cursor, try readValue(cursor)));
+    }
+    return items.toOwnedSlice(cursor.allocator);
 }
 
 fn readCode(cursor: *msgpack.Decoder) Error!Code {
@@ -1033,4 +1049,32 @@ test "value decode releases memory when allocation fails" {
     const encoded = try encodeAlloc(std.testing.allocator, &object);
     defer std.testing.allocator.free(encoded);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, decodeObject, .{encoded});
+}
+
+test "readMembers enforces minimum 4 wire bytes per member and avoids pre-allocation amplification" {
+    // Object header: [1, "C", "m", <members array of 300>]
+    const header = [_]u8{
+        0x94,
+        0x01,
+        0xa1,
+        'C',
+        0xa1,
+        'm',
+        0xdc, 0x01, 0x2c, // array16 len = 300 -> needs >= 1200 wire bytes
+    };
+    try std.testing.expectError(error.LimitExceeded, decodeSlice(std.testing.allocator, &header, .{ .max_bytes = 1024 }));
+
+    // With generous max_bytes, truncated member array must not pre-allocate huge buffer.
+    const huge = [_]u8{
+        0x94,
+        0x01,
+        0xa1,
+        'C',
+        0xa1,
+        'm',
+        0xdd, 0x00, 0x08, 0x00, 0x00, // 524,288 members
+    };
+    var buf: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    try std.testing.expectError(error.Truncated, decodeSlice(fba.allocator(), &huge, .{}));
 }

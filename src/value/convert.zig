@@ -457,14 +457,37 @@ pub fn from(comptime T: type, allocator: std.mem.Allocator, input: T) (Error || 
 
 fn intoObject(comptime T: type, allocator: std.mem.Allocator, tree: *const Value) Error!T {
     const info = @typeInfo(T).@"struct";
-    @setEvalBranchQuota(comptime memberQuota(info.field_names.len));
+    @setEvalBranchQuota(comptime memberQuota(info.field_names.len) * 8);
+    if (info.field_names.len == 0) return .{};
+
+    const kvs = comptime blk: {
+        var entries: [info.field_names.len]struct { []const u8, usize } = undefined;
+        for (info.field_names, 0..) |name, index| {
+            entries[index] = .{ pklName(T, name), index };
+        }
+        break :blk entries;
+    };
+    const field_map = comptime std.StaticStringMap(usize).initComptime(kvs);
+
+    var matched: [info.field_names.len]?*const Value = @splat(null);
+    for (tree.object.members) |member| {
+        switch (member) {
+            .property => |property| {
+                if (field_map.get(property.name)) |index| {
+                    if (matched[index] == null) matched[index] = property.value;
+                }
+            },
+            else => {},
+        }
+    }
+
     var result: T = undefined;
     var seen = std.mem.zeroes([info.field_names.len]bool);
     errdefer inline for (info.field_names, info.field_types, 0..) |name, field_type, index| {
         if (seen[index]) freeInto(field_type, allocator, @field(result, name));
     };
     inline for (info.field_names, info.field_types, info.field_attrs, 0..) |name, field_type, attrs, index| {
-        if (value.findProperty(tree, comptime pklName(T, name))) |property| {
+        if (matched[index]) |property| {
             @field(result, name) = try into(field_type, allocator, property);
             seen[index] = true;
         } else if (@typeInfo(field_type) == .optional) {
@@ -1092,4 +1115,39 @@ test "references decode a typed domain and an owned access path" {
     var text = Value{ .string = "x" };
     try std.testing.expectError(error.TypeMismatch, into(Ref, allocator, &text));
     try std.testing.expectError(error.TypeMismatch, into(Access, allocator, domain));
+}
+
+test "intoObject single-pass StaticStringMap lookup handles renames, duplicates, defaults, and empty structs" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const Empty = struct {};
+    const empty_obj = try testObject(arena, "test#Empty", &.{"ignored"}, &.{.{ .int = Integer.fromSigned(1) }});
+    _ = try into(Empty, allocator, empty_obj);
+
+    const Config = struct {
+        host_name: []const u8,
+        port: u16 = 8080,
+        note: ?[]const u8 = null,
+
+        pub const pkl_names = .{ .host_name = "hostName" };
+    };
+    const obj = try testObject(
+        arena,
+        "test#Config",
+        &.{ "extra", "hostName", "hostName", "note" },
+        &.{
+            .{ .boolean = true },
+            .{ .string = "first.example" },
+            .{ .string = "second.example" },
+            .{ .string = "memo" },
+        },
+    );
+    const decoded = try into(Config, allocator, obj);
+    defer freeInto(Config, allocator, decoded);
+    try std.testing.expectEqualStrings("first.example", decoded.host_name);
+    try std.testing.expectEqual(@as(u16, 8080), decoded.port);
+    try std.testing.expectEqualStrings("memo", decoded.note.?);
 }
